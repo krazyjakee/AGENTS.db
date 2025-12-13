@@ -114,9 +114,12 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             to_path,
             ids,
         } => crate::commands::promote::cmd_promote(&from_path, &to_path, &ids, cli.json),
-        Command::Compact { .. } => {
-            anyhow::bail!("compact is optional for v0.1 and is not implemented yet")
-        }
+        Command::Compact { base, user, out } => crate::commands::compact::cmd_compact(
+            base.as_deref(),
+            user.as_deref(),
+            out.as_deref(),
+            cli.json,
+        ),
         Command::Clean { root, dry_run } => {
             crate::commands::clean::cmd_clean(&root, dry_run, cli.json)
         }

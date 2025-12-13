@@ -199,7 +199,7 @@ pub(crate) enum Command {
         #[arg(long)]
         ids: String, // comma-separated
     },
-    /// (Not implemented) Rewrite and deduplicate layers.
+    /// Rewrite and deduplicate layer files.
     Compact {
         /// Path to a base layer.
         #[arg(long)]

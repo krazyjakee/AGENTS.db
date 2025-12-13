@@ -41,9 +41,8 @@ pub(crate) fn cmd_compact(
     let (base, user) = apply_default_layer_paths(base, user, &cwd);
     let out = match out {
         Some(v) => v.to_string(),
-        None => base
-            .clone()
-            .context("--out is required when --base is not set")?,
+        None => default_out_path(base.as_deref(), user.as_deref())
+            .context("--out is required when no input layers are provided")?,
     };
 
     if base.is_none() && user.is_none() {
@@ -51,6 +50,9 @@ pub(crate) fn cmd_compact(
             "no layers provided (use --base/--user, or run from a directory containing AGENTS.db/AGENTS.user.db)"
         );
     }
+
+    agentsdb_format::ensure_writable_layer_path_allow_user(&out)
+        .context("refuse to write compacted output to a non-writable layer path")?;
 
     let (schema, chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
     agentsdb_format::write_layer_atomic(&out, &schema, &chunks).context("write compacted layer")?;
@@ -86,12 +88,23 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let entry = entry.context("read_dir entry")?;
         let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|name| name == "AGENTS.db")
+        {
+            continue;
+        }
         let is_db = path
             .extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.eq_ignore_ascii_case("db"))
             .unwrap_or(false);
         if !is_db {
+            continue;
+        }
+
+        if agentsdb_format::ensure_writable_layer_path_allow_user(&path).is_err() {
             continue;
         }
 
@@ -107,6 +120,17 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         compacted.push(path);
     }
     Ok(compacted)
+}
+
+fn default_out_path(base: Option<&str>, user: Option<&str>) -> Option<String> {
+    let base_dir = base
+        .and_then(|p| Path::new(p).parent())
+        .map(ToOwned::to_owned);
+    let user_dir = user
+        .and_then(|p| Path::new(p).parent())
+        .map(ToOwned::to_owned);
+    let dir = base_dir.or(user_dir)?;
+    Some(dir.join("AGENTS.compacted.db").to_string_lossy().into_owned())
 }
 
 fn compact_layers(
@@ -287,6 +311,7 @@ mod tests {
         let dir = make_temp_dir();
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
+        let out_path = dir.join("AGENTS.compacted.db");
 
         agentsdb_format::write_layer_atomic(
             &base_path,
@@ -304,12 +329,16 @@ mod tests {
         let user_s = user_path.to_string_lossy().into_owned();
         cmd_compact(Some(&base_s), Some(&user_s), None, true).unwrap();
 
-        let base_file = agentsdb_format::LayerFile::open(&base_path).unwrap();
-        let chunks = agentsdb_format::read_all_chunks(&base_file).unwrap();
+        let out_file = agentsdb_format::LayerFile::open(&out_path).unwrap();
+        let chunks = agentsdb_format::read_all_chunks(&out_file).unwrap();
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].id, 1);
         assert_eq!(chunks[1].id, 2);
         assert_eq!(chunks[2].id, 100);
+
+        let base_file = agentsdb_format::LayerFile::open(&base_path).unwrap();
+        let base_chunks = agentsdb_format::read_all_chunks(&base_file).unwrap();
+        assert_eq!(base_chunks.len(), 2);
     }
 
     #[test]
@@ -352,7 +381,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            HashSet::from(["AGENTS.db".to_string(), "AGENTS.user.db".to_string()])
+            HashSet::from(["AGENTS.user.db".to_string()])
         );
     }
 }
