@@ -30,6 +30,13 @@ The key safety rule: tooling **must not modify `AGENTS.db` in place**.
 
 The CLI binary is named `agentsdb` and lives in `crates/agentsdb-cli/`.
 
+Install a prebuilt release (macOS/Linux/Windows via Git Bash) into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/scripts/install.sh | bash
+agentsdb --help
+```
+
 Install it locally (macOS/Linux/Windows via Git Bash or WSL):
 
 ```sh
