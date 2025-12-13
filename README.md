@@ -1,6 +1,8 @@
 # AGENTS.db
 
-<img src="https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/crates/agentsdb-web/assets/logo.png" alt="logo" />
+<p align="center">
+  <img src="https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/crates/agentsdb-web/assets/logo.png" alt="logo" />
+</p>
 
 AGENTS.db is a file format and toolkit for creating, inspecting, and querying immutable, layered documentation databases—built for deterministic context storage.
 
@@ -153,6 +155,10 @@ agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 
 ```sh
 agentsdb web --root . --bind 127.0.0.1:3030
 ```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/screenshot.png" alt="web-ui" />
+</p>
 
 ## MCP server
 

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentsdb-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "thiserror",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-format"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agentsdb-core",
  "memmap2",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-query"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-web"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
