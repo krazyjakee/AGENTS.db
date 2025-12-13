@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "agentsdb",
     version,
-    about = "AGENTS.db tooling (v0.1.1)",
+    about = "AGENTS.db tooling (v0.1.2)",
     long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - `search --query` uses a deterministic hash embedding (not a semantic model)."
 )]
 pub(crate) struct Cli {
