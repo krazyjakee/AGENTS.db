@@ -221,9 +221,9 @@ Use MCP `agents_search` to very quickly look up context for architectural, API, 
 
 ## Learn more
 
-- Spec and semantics: [[docs/RFC.md]]
-- Planned scope for v0.1: [[docs/Reference Implementation v0.1.md]]
-- Looking for a workflow/mental model of how to lean into this approach? See [[WORKFLOW.md]]
+- Spec and semantics: `docs/RFC.md`
+- Planned scope for v0.1: `docs/Reference Implementation v0.1.md`
+- Looking for a workflow/mental model of how to lean into this approach? See `WORKFLOW.md`
 
 ## License
 
