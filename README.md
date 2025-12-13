@@ -2,6 +2,10 @@
 
 AGENTS.db is a file format and toolkit for creating, inspecting, and querying immutable, layered documentation databases—built for deterministic context storage.
 
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/krazyjakee?label=sponsors&style=for-the-badge)](https://github.com/sponsors/krazyjakee) [![GitHub Stars](https://img.shields.io/github/stars/krazyjakee/AGENTS.db?style=for-the-badge&color=yellow)](https://github.com/krazyjakee/AGENTS.db)
+
+![Alt](https://repobeats.axiom.co/api/embed/754b9c5db54aa484d2f93d9d3c943766b33ac869.svg "Repobeats analytics image")
+
 It’s designed for agent systems and MCP servers that need:
 
 - A **read-only, canonical** knowledge base (the Base layer).
