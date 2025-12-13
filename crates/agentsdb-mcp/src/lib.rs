@@ -14,6 +14,7 @@ const TOOL_AGENTS_SEARCH_LEGACY: &str = "agents.search";
 const TOOL_AGENTS_CONTEXT_WRITE_LEGACY: &str = "agents.context.write";
 const TOOL_AGENTS_CONTEXT_PROPOSE_LEGACY: &str = "agents.context.propose";
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
 pub struct ServerConfig {
@@ -21,6 +22,114 @@ pub struct ServerConfig {
     pub user: Option<String>,
     pub delta: Option<String>,
     pub local: Option<String>,
+}
+
+fn expand_path_vars(path: &str, cwd: &Path) -> anyhow::Result<String> {
+    let mut out = path.to_string();
+
+    let cwd_s = cwd.to_string_lossy();
+    out = out.replace("${PWD}", &cwd_s);
+    out = out.replace("$PWD", &cwd_s);
+
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    if let Some(home) = home {
+        let home_s = home.to_string_lossy();
+        out = out.replace("${HOME}", &home_s);
+        out = out.replace("$HOME", &home_s);
+        if out == "~" {
+            out = home_s.to_string();
+        } else if let Some(rest) = out.strip_prefix("~/") {
+            out = home.join(rest).to_string_lossy().into_owned();
+        }
+    }
+
+    Ok(out)
+}
+
+fn find_relative_in_ancestors(cwd: &Path, rel: &Path) -> Option<PathBuf> {
+    if !rel.is_relative() {
+        return None;
+    }
+    for ancestor in cwd.ancestors() {
+        let candidate = ancestor.join(rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn normalize_config_with_cwd(mut config: ServerConfig, cwd: &Path) -> anyhow::Result<ServerConfig> {
+    config.base = config
+        .base
+        .as_deref()
+        .map(|p| expand_path_vars(p, cwd))
+        .transpose()?;
+    config.user = config
+        .user
+        .as_deref()
+        .map(|p| expand_path_vars(p, cwd))
+        .transpose()?;
+    config.delta = config
+        .delta
+        .as_deref()
+        .map(|p| expand_path_vars(p, cwd))
+        .transpose()?;
+    config.local = config
+        .local
+        .as_deref()
+        .map(|p| expand_path_vars(p, cwd))
+        .transpose()?;
+
+    // Best-effort: if base is a relative path and the file exists in an ancestor,
+    // resolve it so we can anchor other relative layer paths to the same directory.
+    let base_dir = if let Some(base) = config.base.as_deref() {
+        let base_path = PathBuf::from(base);
+        let resolved_base = if base_path.exists() {
+            Some(base_path)
+        } else {
+            find_relative_in_ancestors(cwd, &base_path)
+        };
+        resolved_base
+            .as_deref()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+    } else {
+        None
+    };
+
+    if let Some(base_dir) = base_dir {
+        if let Some(user) = config.user.as_deref() {
+            let p = Path::new(user);
+            if p.is_relative() {
+                config.user = Some(base_dir.join(p).to_string_lossy().into_owned());
+            }
+        }
+        if let Some(delta) = config.delta.as_deref() {
+            let p = Path::new(delta);
+            if p.is_relative() {
+                config.delta = Some(base_dir.join(p).to_string_lossy().into_owned());
+            }
+        }
+        if let Some(local) = config.local.as_deref() {
+            let p = Path::new(local);
+            if p.is_relative() {
+                config.local = Some(base_dir.join(p).to_string_lossy().into_owned());
+            }
+        }
+        if let Some(base) = config.base.as_deref() {
+            let p = PathBuf::from(base);
+            if !p.exists() {
+                if let Some(found) = find_relative_in_ancestors(cwd, &p) {
+                    config.base = Some(found.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
+    Ok(config)
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +243,9 @@ struct ToolCallParams {
 }
 
 pub fn serve_stdio(config: ServerConfig) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().context("get current working directory")?;
+    let config = normalize_config_with_cwd(config, &cwd).context("normalize layer paths")?;
+
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -353,6 +465,21 @@ fn is_openai_tool_name_compatible(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn make_temp_dir(name: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "agentsdb-mcp-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
     #[test]
     fn tool_names_are_openai_compatible() {
         let list = handle_tools_list();
@@ -371,6 +498,56 @@ mod tests {
                 "tool name not OpenAI-compatible: {name}"
             );
         }
+    }
+
+    #[test]
+    fn normalize_resolves_base_in_ancestor_and_anchors_rel_layers() {
+        let root = make_temp_dir("normalize");
+        let nested = root.join("a/b/c");
+        std::fs::create_dir_all(&nested).expect("create nested cwd");
+
+        let base = root.join("AGENTS.db");
+        std::fs::write(&base, b"").expect("write base placeholder");
+
+        let cfg = ServerConfig {
+            base: Some("AGENTS.db".to_string()),
+            user: None,
+            delta: None,
+            local: Some("AGENTS.local.db".to_string()),
+        };
+        let normalized = normalize_config_with_cwd(cfg, &nested).expect("normalize config");
+
+        assert_eq!(
+            normalized.base.as_deref(),
+            Some(base.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            normalized.local.as_deref(),
+            Some(root.join("AGENTS.local.db").to_string_lossy().as_ref())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_expands_pwd() {
+        let root = make_temp_dir("pwd");
+        let base = root.join("AGENTS.db");
+        std::fs::write(&base, b"").expect("write base placeholder");
+
+        let cfg = ServerConfig {
+            base: Some("$PWD/AGENTS.db".to_string()),
+            user: None,
+            delta: None,
+            local: None,
+        };
+        let normalized = normalize_config_with_cwd(cfg, &root).expect("normalize config");
+        assert_eq!(
+            normalized.base.as_deref(),
+            Some(base.to_string_lossy().as_ref())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
@@ -403,6 +580,30 @@ fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<
             layers.delta = None;
         }
         if !keep("local") {
+            layers.local = None;
+        }
+    }
+
+    // Treat missing optional layers as absent. Base is expected to exist if configured.
+    if let Some(base) = layers.base.as_deref() {
+        if !Path::new(base).exists() {
+            anyhow::bail!(
+                "base layer not found at {base:?} (configure an absolute path, or run the server with CWD set to your project root)"
+            );
+        }
+    }
+    if let Some(user) = layers.user.as_deref() {
+        if !Path::new(user).exists() {
+            layers.user = None;
+        }
+    }
+    if let Some(delta) = layers.delta.as_deref() {
+        if !Path::new(delta).exists() {
+            layers.delta = None;
+        }
+    }
+    if let Some(local) = layers.local.as_deref() {
+        if !Path::new(local).exists() {
             layers.local = None;
         }
     }

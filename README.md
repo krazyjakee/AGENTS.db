@@ -209,7 +209,7 @@ Keep a high level overview of the project and add these lines:
 
 This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
 Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
-Use MCP `agents_search` for architectural, API, and historical context.
+Use MCP `agents_search` to very quickly look up context for architectural, API, and historical changes.
 ```
 
 ## Learn more
