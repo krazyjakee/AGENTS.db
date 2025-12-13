@@ -55,7 +55,15 @@ See available commands:
 agentsdb --help
 ```
 
-### 1) Collect canonical sources into a manifest
+### 1) Init (wide collect + compile)
+
+This scans your repo for common documentation files (wide net) and directly writes `AGENTS.db`.
+
+```sh
+agentsdb init
+```
+
+#### Or manually collect and compile canonical sources
 
 This scans your repo for source files (by default `AGENTS.md`) and produces a JSON manifest that `compile` understands.
 
@@ -67,8 +75,6 @@ agentsdb collect \
   --dim 128 \
   --element-type f32
 ```
-
-### 2) Compile an immutable base layer (`AGENTS.db`)
 
 ```sh
 agentsdb compile \
@@ -91,7 +97,7 @@ agentsdb inspect AGENTS.db
 Search just the base layer:
 
 ```sh
-agentsdb search --base AGENTS.db --query "append-only" -k 5
+agentsdb search --base AGENTS.db --query "something awesome"
 ```
 
 Search across multiple layers:
@@ -132,7 +138,7 @@ agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 
 `agentsdb serve` starts an MCP server over stdio (intended to be launched by an MCP-capable host).
 
 ```sh
-agentsdb serve --base AGENTS.db --local AGENTS.local.db
+agentsdb serve --base "$PWD/AGENTS.db" --local "$PWD/AGENTS.local.db"
 ```
 
 The v0.1 target API surface is described in `docs/RFC.md` (e.g. `agents_search`, `agents_context_write`).
@@ -201,8 +207,8 @@ Keep a high level overview of the project and add these lines:
 ```
 ## Agent-Specific Notes
 
+This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
 Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
-This repository includes a compiled documentation database at `agents.db`.
 Use MCP `agents_search` for architectural, API, and historical context.
 ```
 

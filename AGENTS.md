@@ -41,6 +41,6 @@
 
 ## Agent-Specific Notes
 
+This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
 Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
-This repository includes a compiled documentation database at `agents.db`.
 Use MCP `agents_search` for architectural, API, and historical context.

@@ -39,6 +39,12 @@ Broken down:
 
 In v0.1, the “compiler” is driven by canonical sources you choose (by default `AGENTS.md` files).
 
+Shortcut (wide net docs + compile, no manifest left behind):
+
+```sh
+agentsdb init
+```
+
 Collect sources into a JSON manifest:
 
 ```sh

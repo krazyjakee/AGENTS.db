@@ -255,7 +255,7 @@ fn handle_tools_list() -> Value {
         "tools": [
             {
                 "name": TOOL_AGENTS_SEARCH,
-                "description": "Search across one or more AGENTS.db layers.",
+                "description": "Search across knowledge base layers for context on the current project or task.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -273,7 +273,7 @@ fn handle_tools_list() -> Value {
             },
             {
                 "name": TOOL_AGENTS_CONTEXT_WRITE,
-                "description": "Append a new chunk to the local or delta layer.",
+                "description": "Append a new chunk to the local or delta knowledge base layer.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -296,7 +296,7 @@ fn handle_tools_list() -> Value {
             },
             {
                 "name": TOOL_AGENTS_CONTEXT_PROPOSE,
-                "description": "Propose promotion of a delta chunk to user.",
+                "description": "Propose promotion of a delta chunk of to user.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
