@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "crates/agentsdb-core",
+  "crates/agentsdb-format",
+  "crates/agentsdb-query",
+  "crates/agentsdb-mcp",
+  "crates/agentsdb-cli",
+]
+resolver = "2"

@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+**/.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Rust / Cargo
+/target/
+**/*.rs.bk
+*.pdb
+
+# AgentsDB generated outputs
+/build/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / misc
+.env
+.env.*
+!.env.example
+*.log

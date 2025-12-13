@@ -1,0 +1,12 @@
+[package]
+name = "agentsdb-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = "2.0"
+
+[features]
+serde = ["dep:serde"]
