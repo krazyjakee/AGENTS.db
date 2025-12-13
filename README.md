@@ -1,6 +1,6 @@
-# agents.db (AGENTS.db)
+# AGENTS.db
 
-`agents.db` is a local, layered “context store” file format (`AGENTS.db`) plus tools to **build**, **validate**, **search**, and **append** new context without rewriting history.
+AGENTS.db is a file format and toolkit for creating, inspecting, and querying immutable, layered documentation databases—built for deterministic context storage.
 
 It’s designed for agent systems and MCP servers that need:
 
