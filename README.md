@@ -11,7 +11,7 @@ It’s designed for agent systems and MCP servers that need:
 
 This repo is currently targeting **v0.1**; the spec is in `docs/RFC.md`.
 
-## The Big Idea (for humans)
+## The Big Idea
 
 Think of your project knowledge as “chunks” stored in layer files:
 
