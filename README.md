@@ -210,19 +210,6 @@ cargo fmt --all
 cargo clippy --all-targets --all-features
 ```
 
-## What about my AGENTS.md file?
-
-Agents.db is supposed to complement the human readable text contexts, not replace it.
-Keep a high level overview of the project and add these lines:
-
-```
-## Agent-Specific Notes
-
-This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
-Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
-Use MCP `agents_search` to very quickly look up context for architectural, API, and historical changes.
-```
-
 ## Learn more
 
 - Spec and semantics: `docs/RFC.md`
@@ -232,3 +219,9 @@ Use MCP `agents_search` to very quickly look up context for architectural, API, 
 ## License
 
 MIT. See `LICENSE`.
+
+## Agent-Specific Notes
+
+This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
+Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
+Use MCP `agents_search` to very quickly look up context for architectural, API, and historical changes.
