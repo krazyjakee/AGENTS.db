@@ -15,6 +15,13 @@ pub(crate) struct CleanJson<'a> {
 }
 
 #[derive(Serialize)]
+pub(crate) struct ListEntryJson {
+    pub(crate) path: String,
+    pub(crate) chunk_count: u64,
+    pub(crate) file_length_bytes: u64,
+}
+
+#[derive(Serialize)]
 pub(crate) struct InspectJson<'a> {
     pub(crate) path: &'a str,
     pub(crate) header: HeaderJson,

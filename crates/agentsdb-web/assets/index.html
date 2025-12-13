@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AGENTS.db</title>
+    <link rel="icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/assets/app.css">
+    <script defer src="/assets/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <img class="logo" src="/logo.png" alt="AGENTS.db logo">
+        <div>
+          <div class="brandTitle mono">AGENTS.db</div>
+          <div class="brandSub">Web interface</div>
+        </div>
+      </div>
+      <div class="grow"></div>
+      <button id="refresh" class="iconOnly secondary" title="Refresh layer list" aria-label="Refresh">
+        <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+          <path d="M21 3v6h-6"/>
+        </svg>
+      </button>
+    </header>
+
+    <main>
+      <section class="card">
+        <div class="row">
+          <div>
+            <label>Layer</label>
+            <select id="layer"></select>
+          </div>
+        </div>
+        <div id="meta" class="muted" style="margin-top:10px"></div>
+        <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+        <div class="row">
+          <div>
+            <label>Kind filter</label>
+            <select id="kindFilter">
+              <option value="">(all)</option>
+            </select>
+          </div>
+          <div>
+            <label>Include removed</label>
+            <select id="includeRemoved">
+              <option value="0">No</option>
+              <option value="1">Yes</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="load" class="icon" title="Load chunk list" aria-label="Load">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+              <path d="M21 3v6h-6"/>
+            </svg>
+            Load
+          </button>
+          <button id="addBtn" class="icon secondary" title="Add a new chunk (writes only)" aria-label="Add">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14"/>
+              <path d="M5 12h14"/>
+            </svg>
+            Add
+          </button>
+        </div>
+        <div id="addPanel" style="display:none; margin-top:10px">
+          <label>Scope (writes only)</label>
+          <select id="addScope">
+            <option value="local">local (AGENTS.local.db)</option>
+            <option value="delta">delta (AGENTS.delta.db)</option>
+          </select>
+          <label>Kind</label>
+          <input id="addKind" value="note">
+          <label>Confidence</label>
+          <input id="addConfidence" type="number" min="0" max="1" step="0.01" value="0.9">
+          <label>Content</label>
+          <textarea id="addContent" rows="8" class="mono"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button id="addSubmit" class="icon" title="Append chunk (Ctrl/⌘ + Enter)" aria-label="Append">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Append
+            </button>
+            <button id="addCancel" class="icon secondary" title="Cancel (Esc)" aria-label="Cancel">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6L6 18"/>
+                <path d="M6 6l12 12"/>
+              </svg>
+              Cancel
+            </button>
+          </div>
+          <div class="muted" style="margin-top:6px">
+            Writes are restricted to AGENTS.local.db / AGENTS.delta.db under the selected root.
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row" style="align-items:flex-end">
+          <div>
+            <label>Pagination</label>
+            <div class="row" style="align-items:center">
+              <input id="offset" type="number" min="0" step="100" value="0">
+              <input id="limit" type="number" min="1" max="500" step="50" value="100">
+              <button id="prevPage" class="iconOnly secondary" title="Previous page" aria-label="Previous page">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M15 18l-6-6 6-6"/>
+                </svg>
+              </button>
+              <button id="nextPage" class="iconOnly secondary" title="Next page" aria-label="Next page">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 18l6-6-6-6"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div id="status" class="muted" style="margin:10px 0"></div>
+        <table id="table">
+          <thead>
+            <tr><th>ID</th><th>Kind</th><th>Conf</th><th>Preview</th><th>Actions</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div id="viewer" style="margin-top:10px; display:none">
+          <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+          <div class="row">
+            <div id="viewTitle" class="mono"></div>
+            <button id="closeView" class="iconOnly secondary" title="Close (Esc)" aria-label="Close viewer">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6L6 18"/>
+                <path d="M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <pre id="viewBody" class="mono" style="white-space:pre-wrap; margin:10px 0 0"></pre>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+

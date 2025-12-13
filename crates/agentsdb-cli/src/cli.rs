@@ -18,6 +18,12 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    /// List readable `.db` layer files in a directory.
+    List {
+        /// Root directory to scan for `.db` files.
+        #[arg(long, default_value = ".")]
+        root: String,
+    },
     /// Collect common documentation sources and compile an AGENTS.db layer (no manifest left behind).
     Init {
         /// Root directory to scan for documentation.
@@ -214,6 +220,15 @@ pub(crate) enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Launch a local Web UI for browsing and editing writable layers.
+    Web {
+        /// Root directory to scan for `.db` files.
+        #[arg(long, default_value = ".")]
+        root: String,
+        /// Bind address, e.g. `127.0.0.1:3030`.
+        #[arg(long, default_value = "127.0.0.1:3030")]
+        bind: String,
+    },
 }
 
 #[cfg(test)]
@@ -272,6 +287,27 @@ mod tests {
                 assert!(!dry_run);
             }
             _ => panic!("expected clean command"),
+        }
+    }
+
+    #[test]
+    fn list_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "list"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::List { root } => assert_eq!(root, "."),
+            _ => panic!("expected list command"),
+        }
+    }
+
+    #[test]
+    fn web_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "web"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::Web { root, bind } => {
+                assert_eq!(root, ".");
+                assert_eq!(bind, "127.0.0.1:3030");
+            }
+            _ => panic!("expected web command"),
         }
     }
 }

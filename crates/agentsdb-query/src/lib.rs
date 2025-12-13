@@ -3,6 +3,7 @@ use agentsdb_core::types::{
     Author, Chunk, ChunkId, LayerId, ProvenanceRef, SearchFilters, SearchResult,
 };
 use agentsdb_format::{LayerFile, SourceRef};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 type Visibility = (HashSet<(LayerId, ChunkId)>, HashMap<ChunkId, Vec<LayerId>>);
@@ -25,17 +26,15 @@ pub struct LayerSet {
 impl LayerSet {
     pub fn open(&self) -> Result<Vec<(LayerId, LayerFile)>, Error> {
         let mut layers = Vec::new();
-        if let Some(path) = &self.local {
-            layers.push((LayerId::Local, LayerFile::open(path)?));
-        }
-        if let Some(path) = &self.user {
-            layers.push((LayerId::User, LayerFile::open(path)?));
-        }
-        if let Some(path) = &self.delta {
-            layers.push((LayerId::Delta, LayerFile::open(path)?));
-        }
-        if let Some(path) = &self.base {
-            layers.push((LayerId::Base, LayerFile::open(path)?));
+        for (layer_id, path) in [
+            (LayerId::Local, &self.local),
+            (LayerId::User, &self.user),
+            (LayerId::Delta, &self.delta),
+            (LayerId::Base, &self.base),
+        ] {
+            if let Some(path) = path {
+                layers.push((layer_id, LayerFile::open(path)?));
+            }
         }
         validate_schema_compatible(&layers)?;
         Ok(layers)
@@ -148,15 +147,14 @@ fn validate_schema_compatible(layers: &[(LayerId, LayerFile)]) -> Result<(), Err
     }
     let first = &layers[0].1.embedding_matrix;
     for (_, layer) in &layers[1..] {
-        let other = &layer.embedding_matrix;
-        if other.dim != first.dim {
+        let m = &layer.embedding_matrix;
+        if m.dim != first.dim {
             return Err(SchemaError::Mismatch("embedding dim mismatch").into());
         }
-        if other.element_type != first.element_type {
+        if m.element_type != first.element_type {
             return Err(SchemaError::Mismatch("embedding element type mismatch").into());
         }
-        // For v0.1, treat quant_scale as schema (especially for EMBED_I8).
-        if other.quant_scale.to_bits() != first.quant_scale.to_bits() {
+        if m.quant_scale.to_bits() != first.quant_scale.to_bits() {
             return Err(SchemaError::Mismatch("embedding quant_scale mismatch").into());
         }
     }
@@ -172,16 +170,12 @@ fn compute_visibility(layers: &[(LayerId, LayerFile)]) -> Result<Visibility, Err
         for chunk in layer.chunks() {
             let chunk = chunk?;
             let id = ChunkId(chunk.id);
-            match seen.get(&id).copied() {
-                None => {
-                    seen.insert(id, *layer_id);
+            match seen.entry(id) {
+                Entry::Vacant(v) => {
+                    v.insert(*layer_id);
                     visible.insert((*layer_id, id));
                 }
-                Some(higher) => {
-                    hidden_by.entry(id).or_default().push(*layer_id);
-                    // Ensure the "higher" layer's chunk is marked visible (it will be).
-                    let _ = higher;
-                }
+                Entry::Occupied(_) => hidden_by.entry(id).or_default().push(*layer_id),
             }
         }
     }

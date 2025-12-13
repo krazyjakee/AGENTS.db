@@ -15,8 +15,7 @@ fn ensure_gitignore_entry(root_path: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&gitignore_path)
-        .context("Failed to read .gitignore")?;
+    let content = std::fs::read_to_string(&gitignore_path).context("Failed to read .gitignore")?;
 
     if content.lines().any(|line| line.trim() == "AGENTS.local.db") {
         return Ok(());
@@ -28,42 +27,9 @@ fn ensure_gitignore_entry(root_path: &Path) -> anyhow::Result<()> {
         format!("{}\nAGENTS.local.db\n", content)
     };
 
-    std::fs::write(&gitignore_path, updated_content)
-        .context("Failed to write .gitignore")?;
+    std::fs::write(&gitignore_path, updated_content).context("Failed to write .gitignore")?;
 
     println!("Added AGENTS.local.db to .gitignore");
-    Ok(())
-}
-
-/// Ensures that README.md contains the Agent-Specific Notes section
-fn ensure_readme_agent_notes(root_path: &Path) -> anyhow::Result<()> {
-    let readme_path = root_path.join("README.md");
-
-    if !readme_path.exists() {
-        return Ok(());
-    }
-
-    let content = std::fs::read_to_string(&readme_path)
-        .context("Failed to read README.md")?;
-
-    if content.contains("## Agent-Specific Notes") {
-        return Ok(());
-    }
-
-    let agent_notes = r#"
-## Agent-Specific Notes
-
-This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
-Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
-Use MCP `agents_search` to very quickly look up context for architectural, API, and historical changes.
-"#;
-
-    let updated_content = format!("{}{}", content, agent_notes);
-
-    std::fs::write(&readme_path, updated_content)
-        .context("Failed to write README.md")?;
-
-    println!("Added Agent-Specific Notes section to README.md");
     Ok(())
 }
 
@@ -88,9 +54,6 @@ pub(crate) fn cmd_init(
 
     // Ensure .gitignore has AGENTS.local.db
     ensure_gitignore_entry(root_path)?;
-
-    // Ensure README.md has Agent-Specific Notes section
-    ensure_readme_agent_notes(root_path)?;
 
     let files = collect_files_wide_docs(root_path)?;
 
@@ -142,4 +105,45 @@ pub(crate) fn cmd_init(
         println!("Wrote {out} ({chunks} chunks)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn make_temp_dir() -> PathBuf {
+        static CTR: AtomicUsize = AtomicUsize::new(0);
+        let n = CTR.fetch_add(1, Ordering::SeqCst);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "agentsdb_cli_init_test_{}_{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn init_does_not_modify_readme() {
+        let root = make_temp_dir();
+        let readme_path = root.join("README.md");
+        let original = "# Title\n\nSome content.\n";
+        std::fs::write(&readme_path, original).expect("write README");
+
+        // Include a .gitignore to exercise init side effects without touching README.
+        std::fs::write(root.join(".gitignore"), "target/\n").expect("write .gitignore");
+
+        let out_path = root.join("AGENTS.test.db");
+        let root_s = root.to_string_lossy().to_string();
+        let out_s = out_path.to_string_lossy().to_string();
+        cmd_init(&root_s, &out_s, "docs", 8, "f32", None, true).expect("init should succeed");
+
+        let after = std::fs::read_to_string(&readme_path).expect("read README");
+        assert_eq!(after, original);
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
 }

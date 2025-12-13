@@ -1,33 +1,23 @@
 use crate::types::ValidateJson;
 
 pub(crate) fn cmd_validate(path: &str, json: bool) -> anyhow::Result<()> {
-    let res = agentsdb_format::LayerFile::open(path);
-    match res {
-        Ok(_) => {
-            if json {
-                let out = ValidateJson {
-                    ok: true,
-                    path,
-                    error: None,
-                };
-                println!("{}", serde_json::to_string_pretty(&out)?);
-            } else {
-                println!("OK: {path}");
-            }
+    let err = agentsdb_format::LayerFile::open(path).err();
+    if json {
+        let out = ValidateJson {
+            ok: err.is_none(),
+            path,
+            error: err.map(|e| e.to_string()),
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        if out.ok {
             Ok(())
+        } else {
+            std::process::exit(1);
         }
-        Err(e) => {
-            if json {
-                let out = ValidateJson {
-                    ok: false,
-                    path,
-                    error: Some(e.to_string()),
-                };
-                println!("{}", serde_json::to_string_pretty(&out)?);
-                std::process::exit(1);
-            } else {
-                anyhow::bail!("INVALID: {path}: {e}");
-            }
-        }
+    } else if let Some(e) = err {
+        anyhow::bail!("INVALID: {path}: {e}");
+    } else {
+        println!("OK: {path}");
+        Ok(())
     }
 }

@@ -4,12 +4,13 @@ version = 4
 
 [[package]]
 name = "agentsdb-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
  "agentsdb-mcp",
  "agentsdb-query",
+ "agentsdb-web",
  "anyhow",
  "clap",
  "serde",
@@ -18,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -26,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-format"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentsdb-core",
  "memmap2",
@@ -35,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
@@ -47,12 +48,23 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-query"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "agentsdb-web"
+version = "0.1.1"
+dependencies = [
+ "agentsdb-core",
+ "agentsdb-format",
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

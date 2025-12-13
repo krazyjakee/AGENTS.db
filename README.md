@@ -1,5 +1,7 @@
 # AGENTS.db
 
+<img src="https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/crates/agentsdb-web/assets/logo.png" alt="logo" />
+
 AGENTS.db is a file format and toolkit for creating, inspecting, and querying immutable, layered documentation databases—built for deterministic context storage.
 
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/krazyjakee?label=sponsors&style=for-the-badge)](https://github.com/sponsors/krazyjakee) [![GitHub Stars](https://img.shields.io/github/stars/krazyjakee/AGENTS.db?style=for-the-badge&color=yellow)](https://github.com/krazyjakee/AGENTS.db)
@@ -144,6 +146,14 @@ Then search including local results:
 agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 5
 ```
 
+## Web UI
+
+`agentsdb web` launches a local Web UI for browsing layers under a root directory and appending/removing chunks in writable layers (`AGENTS.local.db` / `AGENTS.delta.db`).
+
+```sh
+agentsdb web --root . --bind 127.0.0.1:3030
+```
+
 ## MCP server
 
 `agentsdb serve` starts an MCP server over stdio (intended to be launched by an MCP-capable host).
@@ -197,6 +207,7 @@ gemini mcp add --transport stdio --scope project agentsdb agentsdb serve --base 
 - `crates/agentsdb-format/`: `AGENTS.db` file reader/writer.
 - `crates/agentsdb-query/`: query engine across one or more layers.
 - `crates/agentsdb-mcp/`: MCP server library.
+- `crates/agentsdb-web/`: Web UI server + embedded assets.
 - `crates/agentsdb-cli/`: `agentsdb` CLI binary.
 - `docs/`: spec and implementation plan (`docs/RFC.md`, `docs/Reference Implementation v0.1.md`).
 

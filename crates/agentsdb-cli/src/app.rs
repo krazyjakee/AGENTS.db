@@ -2,6 +2,7 @@ use crate::cli::{Cli, Command};
 
 pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.cmd {
+        Command::List { root } => crate::commands::list::cmd_list(&root, cli.json),
         Command::Init {
             root,
             out,
@@ -118,6 +119,12 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Clean { root, dry_run } => {
             crate::commands::clean::cmd_clean(&root, dry_run, cli.json)
+        }
+        Command::Web { root, bind } => {
+            if cli.json {
+                anyhow::bail!("--json is not supported for web");
+            }
+            crate::commands::web::cmd_web(&root, &bind)
         }
     }
 }

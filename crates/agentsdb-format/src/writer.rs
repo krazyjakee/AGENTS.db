@@ -102,37 +102,34 @@ pub fn append_layer_atomic(
 }
 
 pub fn ensure_writable_layer_path(path: impl AsRef<Path>) -> Result<(), Error> {
-    let path = path.as_ref();
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    if name == "AGENTS.db" || name == "AGENTS.user.db" {
-        return Err(PermissionError::WriteNotPermitted {
-            path: path.to_path_buf(),
-        }
-        .into());
-    }
-    Ok(())
+    ensure_writable_layer_path_inner(path.as_ref(), false)
 }
 
 pub fn ensure_writable_layer_path_allow_user(path: impl AsRef<Path>) -> Result<(), Error> {
-    let path = path.as_ref();
-    let name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    if name == "AGENTS.db" {
-        return Err(PermissionError::WriteNotPermitted {
-            path: path.to_path_buf(),
-        }
-        .into());
-    }
-    Ok(())
+    ensure_writable_layer_path_inner(path.as_ref(), true)
 }
 
 pub fn read_all_chunks(file: &LayerFile) -> Result<Vec<ChunkInput>, Error> {
     decode_all_chunks(file)
+}
+
+fn ensure_writable_layer_path_inner(path: &Path, allow_user: bool) -> Result<(), Error> {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let forbidden = if allow_user {
+        ["AGENTS.db"].as_slice()
+    } else {
+        ["AGENTS.db", "AGENTS.user.db"].as_slice()
+    };
+    if forbidden.contains(&name) {
+        return Err(PermissionError::WriteNotPermitted {
+            path: path.to_path_buf(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn decode_all_chunks(file: &LayerFile) -> Result<Vec<ChunkInput>, Error> {

@@ -4,6 +4,7 @@ members = [
   "crates/agentsdb-format",
   "crates/agentsdb-query",
   "crates/agentsdb-mcp",
+  "crates/agentsdb-web",
   "crates/agentsdb-cli",
 ]
 resolver = "2"

@@ -23,10 +23,8 @@ pub(crate) fn cmd_promote(
     let from_schema = agentsdb_format::schema_of(&from_file);
     let from_chunks = agentsdb_format::read_all_chunks(&from_file)?;
 
-    let mut by_id: BTreeMap<u32, agentsdb_format::ChunkInput> = BTreeMap::new();
-    for c in from_chunks {
-        by_id.insert(c.id, c);
-    }
+    let by_id: BTreeMap<u32, agentsdb_format::ChunkInput> =
+        from_chunks.into_iter().map(|c| (c.id, c)).collect();
 
     let mut promote = Vec::new();
     for id in &wanted {
@@ -51,8 +49,7 @@ pub(crate) fn cmd_promote(
         {
             anyhow::bail!("schema mismatch between {from_path} and {to_path}");
         }
-        let mut promote_mut = promote.clone();
-        agentsdb_format::append_layer_atomic(to_path, &mut promote_mut).context("append")?;
+        agentsdb_format::append_layer_atomic(to_path, &mut promote).context("append")?;
     } else {
         agentsdb_format::write_layer_atomic(to_path, &from_schema, &promote).context("write")?;
     }
