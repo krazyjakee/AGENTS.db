@@ -270,7 +270,11 @@ mod tests {
         static CTR: AtomicUsize = AtomicUsize::new(0);
         let n = CTR.fetch_add(1, Ordering::SeqCst);
         let mut p = std::env::temp_dir();
-        p.push(format!("agentsdb_cli_compile_test_{}_{}", std::process::id(), n));
+        p.push(format!(
+            "agentsdb_cli_compile_test_{}_{}",
+            std::process::id(),
+            n
+        ));
         std::fs::create_dir_all(&p).expect("create temp dir");
         p
     }
@@ -297,8 +301,8 @@ mod tests {
                 sources: vec![],
             }],
         };
-        let (action1, chunks1) = compile_to_layer(&mut input1, out.to_str().unwrap(), false)
-            .expect("initial compile");
+        let (action1, chunks1) =
+            compile_to_layer(&mut input1, out.to_str().unwrap(), false).expect("initial compile");
         assert_eq!(action1, LayerWriteAction::Created);
         assert_eq!(chunks1, 1);
 
@@ -319,8 +323,8 @@ mod tests {
                 sources: vec![],
             }],
         };
-        let (action2, chunks2) = compile_to_layer(&mut input2, out.to_str().unwrap(), false)
-            .expect("append compile");
+        let (action2, chunks2) =
+            compile_to_layer(&mut input2, out.to_str().unwrap(), false).expect("append compile");
         assert_eq!(action2, LayerWriteAction::Appended);
         assert_eq!(chunks2, 1);
 

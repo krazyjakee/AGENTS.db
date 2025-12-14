@@ -7,6 +7,13 @@ use crate::commands::compile::compile_to_layer;
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
 use crate::util::{assign_stable_id, collect_files_wide_docs};
 
+const AGENT_NOTES_BLOCK: &str = r#"## Agent-Specific Notes
+
+This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.
+For context for any task, you MUST use MCP `agents_search` to look up context including architectural, API, and historical changes.
+Treat `AGENTS.db` layers as immutable; avoid in-place mutation utilities unless required by the design.
+"#;
+
 /// Ensures that AGENTS.local.db is in .gitignore
 fn ensure_gitignore_entry(root_path: &Path) -> anyhow::Result<()> {
     let gitignore_path = root_path.join(".gitignore");
@@ -33,6 +40,44 @@ fn ensure_gitignore_entry(root_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn agent_notes_present(content: &str) -> bool {
+    content.contains("## Agent-Specific Notes")
+        && content.contains("compiled documentation database/knowledgebase at `AGENTS.db`")
+        && content.contains("MCP `agents_search`")
+        && content.contains("layers as immutable")
+}
+
+fn ensure_agent_notes(root_path: &Path) -> anyhow::Result<()> {
+    for file_name in ["AGENTS.md", "GEMINI.md", "CLAUDE.md"] {
+        let path = root_path.join(file_name);
+        if !path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+
+        if agent_notes_present(&content) {
+            continue;
+        }
+
+        let mut updated = content;
+        if !updated.is_empty() {
+            if !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            if !updated.ends_with("\n\n") {
+                updated.push('\n');
+            }
+        }
+        updated.push_str(AGENT_NOTES_BLOCK);
+
+        std::fs::write(&path, updated)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cmd_init(
     root: &str,
@@ -54,6 +99,9 @@ pub(crate) fn cmd_init(
 
     // Ensure .gitignore has AGENTS.local.db
     ensure_gitignore_entry(root_path)?;
+
+    // Ensure agent notes are present in relevant instruction files.
+    ensure_agent_notes(root_path)?;
 
     let files = collect_files_wide_docs(root_path)?;
 
@@ -143,6 +191,44 @@ mod tests {
 
         let after = std::fs::read_to_string(&readme_path).expect("read README");
         assert_eq!(after, original);
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn init_appends_agent_notes_when_missing() {
+        let root = make_temp_dir();
+
+        std::fs::write(root.join(".gitignore"), "target/\n").expect("write .gitignore");
+        std::fs::write(root.join("README.md"), "# Title\n").expect("write README");
+
+        let agents_path = root.join("AGENTS.md");
+        std::fs::write(&agents_path, "# Repo Instructions\n").expect("write AGENTS");
+
+        let claude_path = root.join("CLAUDE.md");
+        std::fs::write(&claude_path, AGENT_NOTES_BLOCK).expect("write CLAUDE");
+
+        let out_path = root.join("AGENTS.test.db");
+        let root_s = root.to_string_lossy().to_string();
+        let out_s = out_path.to_string_lossy().to_string();
+        cmd_init(&root_s, &out_s, "docs", 8, "f32", None, true).expect("init should succeed");
+
+        let agents_after = std::fs::read_to_string(&agents_path).expect("read AGENTS");
+        assert!(agents_after.contains("## Agent-Specific Notes"));
+        assert!(agents_after.contains("MCP `agents_search`"));
+        assert!(agents_after.ends_with(AGENT_NOTES_BLOCK));
+
+        let claude_after = std::fs::read_to_string(&claude_path).expect("read CLAUDE");
+        assert_eq!(
+            claude_after.matches("## Agent-Specific Notes").count(),
+            1,
+            "init should not duplicate notes"
+        );
+
+        assert!(
+            !root.join("GEMINI.md").exists(),
+            "init should not create missing files"
+        );
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
