@@ -4,7 +4,6 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "agentsdb",
     version,
-    ${1}0.1.3${2},
     long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - `search --query` uses a deterministic hash embedding (not a semantic model)."
 )]
 pub(crate) struct Cli {
@@ -85,6 +84,9 @@ pub(crate) enum Command {
         /// Output layer path to write.
         #[arg(long)]
         out: String,
+        /// Replace the output file instead of appending.
+        #[arg(long)]
+        replace: bool,
         /// Root directory to search for files when no PATHs are provided.
         #[arg(long, default_value = ".")]
         root: String,
@@ -327,6 +329,7 @@ mod tests {
             Command::Compile {
                 input,
                 out,
+                replace,
                 root,
                 includes,
                 paths,
@@ -338,6 +341,7 @@ mod tests {
             } => {
                 assert_eq!(input, None);
                 assert_eq!(out, "AGENTS.db");
+                assert!(!replace);
                 assert_eq!(root, ".");
                 assert_eq!(includes, vec!["AGENTS.md".to_string()]);
                 assert_eq!(paths, vec!["README.md".to_string()]);
@@ -363,9 +367,15 @@ mod tests {
         ])
         .expect("parse should succeed");
         match cli.cmd {
-            Command::Compile { input, out, .. } => {
+            Command::Compile {
+                input,
+                out,
+                replace,
+                ..
+            } => {
                 assert_eq!(input, Some("build/input.json".to_string()));
                 assert_eq!(out, "AGENTS.db");
+                assert!(!replace);
             }
             _ => panic!("expected compile command"),
         }

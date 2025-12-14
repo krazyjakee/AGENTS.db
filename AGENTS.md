@@ -8,7 +8,7 @@
   - `crates/agentsdb-query/`: query engine across one or more layers.
   - `crates/agentsdb-mcp/`: MCP-facing library for search/write semantics.
   - `crates/agentsdb-cli/`: `agentsdb` CLI binary (`src/main.rs`).
-- `docs/`: design docs, including `docs/RFC.md` and the v0.1 plan.
+- `docs/`: design docs, including `docs/RFC.md`.
 - `target/`: Cargo build output (ignored).
 
 ## Build, Test, and Development Commands

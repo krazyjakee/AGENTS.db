@@ -37,7 +37,7 @@ Broken down:
 
 ## 1. Compile a Base Layer (Canonical, Immutable)
 
-In v0.1, the “compiler” is driven by canonical sources you choose (by default `AGENTS.md` files).
+The “compiler” is driven by canonical sources you choose (by default `AGENTS.md` files).
 
 Shortcut (wide net docs + compile, no manifest left behind):
 
@@ -54,6 +54,8 @@ agentsdb compile --root . --include AGENTS.md --out AGENTS.db --dim 128 --elemen
 ✅ Produces: `AGENTS.db` (Base layer)  
 ✅ Commit it  
 ✅ `agentsdb validate AGENTS.db` confirms it’s readable/well-formed
+
+Note: `agentsdb compile` appends by default; use `--replace` when rebuilding a base layer from scratch.
 
 ---
 
@@ -155,7 +157,7 @@ agentsdb diff --base AGENTS.db --delta AGENTS.delta.db
 
 ## 5. Accept Proposals (Append-Only)
 
-Acceptance in v0.1 is append-only: you copy selected Delta chunks into the User layer.
+Acceptance is append-only: you copy selected Delta chunks into the User layer.
 
 ```sh
 agentsdb promote --from AGENTS.delta.db --to AGENTS.user.db --ids 3,4

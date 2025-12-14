@@ -84,7 +84,7 @@ pub(crate) fn cmd_init(
         },
         chunks,
     };
-    let chunks = compile_to_layer(&mut input, out).context("compile")?;
+    let (_action, chunks) = compile_to_layer(&mut input, out, true).context("compile")?;
 
     if json {
         #[derive(Serialize)]

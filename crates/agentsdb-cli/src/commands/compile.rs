@@ -7,10 +7,18 @@ use std::path::{Path, PathBuf};
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
 use crate::util::{assign_stable_id, collect_files};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayerWriteAction {
+    Created,
+    Replaced,
+    Appended,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cmd_compile(
     input_json: Option<&str>,
     out: &str,
+    replace: bool,
     root: &str,
     includes: &[String],
     paths: &[String],
@@ -41,7 +49,7 @@ pub(crate) fn cmd_compile(
         )?
     };
 
-    let chunks = compile_to_layer(&mut input, out).context("compile")?;
+    let (action, chunks) = compile_to_layer(&mut input, out, replace).context("compile")?;
 
     if json {
         #[derive(Serialize)]
@@ -57,7 +65,12 @@ pub(crate) fn cmd_compile(
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("Wrote {out} ({chunks} chunks)");
+        match action {
+            LayerWriteAction::Appended => println!("Updated {out} (+{chunks} chunks)"),
+            LayerWriteAction::Created | LayerWriteAction::Replaced => {
+                println!("Wrote {out} ({chunks} chunks)")
+            }
+        }
     }
     Ok(())
 }
@@ -155,7 +168,11 @@ fn compile_input_from_sources(
     Ok(CompileInput { schema, chunks })
 }
 
-pub(crate) fn compile_to_layer(input: &mut CompileInput, out: &str) -> anyhow::Result<usize> {
+pub(crate) fn compile_to_layer(
+    input: &mut CompileInput,
+    out: &str,
+    replace: bool,
+) -> anyhow::Result<(LayerWriteAction, usize)> {
     if input.schema.dim == 0 {
         anyhow::bail!("schema.dim must be non-zero");
     }
@@ -177,7 +194,7 @@ pub(crate) fn compile_to_layer(input: &mut CompileInput, out: &str) -> anyhow::R
 
     input.chunks.sort_by_key(|c| c.id);
     let dim = schema.dim as usize;
-    let chunks: Vec<agentsdb_format::ChunkInput> = input
+    let mut chunks: Vec<agentsdb_format::ChunkInput> = input
         .chunks
         .drain(..)
         .map(|c| {
@@ -208,6 +225,109 @@ pub(crate) fn compile_to_layer(input: &mut CompileInput, out: &str) -> anyhow::R
         })
         .collect();
 
-    agentsdb_format::write_layer_atomic(out, &schema, &chunks).context("write layer")?;
-    Ok(chunks.len())
+    let out_path = Path::new(out);
+    let existed = out_path.exists();
+    let action = if !replace && existed {
+        let file = agentsdb_format::LayerFile::open(out_path)
+            .with_context(|| format!("open existing layer {}", out_path.display()))?;
+        let existing_schema = agentsdb_format::schema_of(&file);
+        if existing_schema.dim != schema.dim
+            || existing_schema.element_type != schema.element_type
+            || (existing_schema.quant_scale - schema.quant_scale).abs() > f32::EPSILON
+        {
+            anyhow::bail!(
+                "output layer schema mismatch (existing: dim={}, element_type={:?}, quant_scale={}; new: dim={}, element_type={:?}, quant_scale={}); use --replace or choose a new --out path",
+                existing_schema.dim,
+                existing_schema.element_type,
+                existing_schema.quant_scale,
+                schema.dim,
+                schema.element_type,
+                schema.quant_scale
+            );
+        }
+
+        agentsdb_format::append_layer_atomic(out_path, &mut chunks).context("append layer")?;
+        LayerWriteAction::Appended
+    } else {
+        agentsdb_format::write_layer_atomic(out_path, &schema, &chunks).context("write layer")?;
+        if existed && replace {
+            LayerWriteAction::Replaced
+        } else {
+            LayerWriteAction::Created
+        }
+    };
+
+    Ok((action, chunks.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn make_temp_dir() -> PathBuf {
+        static CTR: AtomicUsize = AtomicUsize::new(0);
+        let n = CTR.fetch_add(1, Ordering::SeqCst);
+        let mut p = std::env::temp_dir();
+        p.push(format!("agentsdb_cli_compile_test_{}_{}", std::process::id(), n));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn compile_appends_when_out_exists() {
+        let dir = make_temp_dir();
+        let out = dir.join("AGENTS.db");
+
+        let mut input1 = CompileInput {
+            schema: CompileSchema {
+                dim: 8,
+                element_type: "f32".to_string(),
+                quant_scale: None,
+            },
+            chunks: vec![CompileChunk {
+                id: 1,
+                kind: "canonical".to_string(),
+                content: "first".to_string(),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: 0,
+                embedding: None,
+                sources: vec![],
+            }],
+        };
+        let (action1, chunks1) = compile_to_layer(&mut input1, out.to_str().unwrap(), false)
+            .expect("initial compile");
+        assert_eq!(action1, LayerWriteAction::Created);
+        assert_eq!(chunks1, 1);
+
+        let mut input2 = CompileInput {
+            schema: CompileSchema {
+                dim: 8,
+                element_type: "f32".to_string(),
+                quant_scale: None,
+            },
+            chunks: vec![CompileChunk {
+                id: 2,
+                kind: "canonical".to_string(),
+                content: "second".to_string(),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: 0,
+                embedding: None,
+                sources: vec![],
+            }],
+        };
+        let (action2, chunks2) = compile_to_layer(&mut input2, out.to_str().unwrap(), false)
+            .expect("append compile");
+        assert_eq!(action2, LayerWriteAction::Appended);
+        assert_eq!(chunks2, 1);
+
+        let file = agentsdb_format::LayerFile::open(&out).expect("open output");
+        let all = agentsdb_format::read_all_chunks(&file).expect("read chunks");
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|c| c.content == "first"));
+        assert!(all.iter().any(|c| c.content == "second"));
+    }
 }

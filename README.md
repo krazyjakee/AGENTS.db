@@ -15,9 +15,9 @@ It’s designed for agent systems and MCP servers that need:
 - A **read-only, canonical** knowledge base (the Base layer).
 - **Append-only layers** for new notes, derived summaries, and proposals.
 - Clear **provenance** (who/what wrote a chunk, and what sources it came from).
-- Fast local search (v0.1 uses a simple brute-force baseline).
+- Fast local search.
 
-This repo is currently targeting **v0.1**; the spec is in `docs/RFC.md`.
+This repo is currently targeting the spec is in `docs/RFC.md`.
 
 ## The Big Idea
 
@@ -92,6 +92,7 @@ agentsdb compile --out AGENTS.db --text "Project note: layers are append-only."
 
 Notes:
 - If embeddings aren’t provided, `compile` uses a deterministic built-in hash embedder (handy for local/dev).
+- `compile` appends to an existing `--out` file by default; use `--replace` to overwrite.
 
 ### 3) Validate and inspect a layer file
 
@@ -161,7 +162,7 @@ agentsdb web --root . --bind 127.0.0.1:3030
 agentsdb serve --base "$PWD/AGENTS.db" --local "$PWD/AGENTS.local.db"
 ```
 
-The v0.1 target API surface is described in `docs/RFC.md` (e.g. `agents_search`, `agents_context_write`).
+The target API surface is described in `docs/RFC.md` (e.g. `agents_search`, `agents_context_write`).
 
 ## MCP setup (Codex CLI / Claude Code / Gemini CLI)
 
@@ -208,7 +209,7 @@ gemini mcp add --transport stdio --scope project agentsdb agentsdb serve --base 
 - `crates/agentsdb-mcp/`: MCP server library.
 - `crates/agentsdb-web/`: Web UI server + embedded assets.
 - `crates/agentsdb-cli/`: `agentsdb` CLI binary.
-- `docs/`: spec and implementation plan (`docs/RFC.md`, `docs/Reference Implementation v0.1.md`).
+- `docs/`: spec and implementation plan (`docs/RFC.md`, `docs/Reference Implementation.md`).
 
 ## Development
 
@@ -223,7 +224,7 @@ cargo clippy --all-targets --all-features
 ## Learn more
 
 - Spec and semantics: `docs/RFC.md`
-- Planned scope for v0.1: `docs/Reference Implementation v0.1.md`
+- Planned scope: `docs/Reference Implementation.md`
 - Looking for a workflow/mental model of how to lean into this approach? See `WORKFLOW.md`
 
 ## License

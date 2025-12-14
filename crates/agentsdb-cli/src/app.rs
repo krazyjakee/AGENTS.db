@@ -42,6 +42,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Compile {
             input,
             out,
+            replace,
             root,
             includes,
             paths,
@@ -53,6 +54,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
         } => crate::commands::compile::cmd_compile(
             input.as_deref(),
             &out,
+            replace,
             &root,
             &includes,
             &paths,
