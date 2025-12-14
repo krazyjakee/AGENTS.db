@@ -263,25 +263,10 @@ pub(crate) fn compile_to_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn make_temp_dir() -> PathBuf {
-        static CTR: AtomicUsize = AtomicUsize::new(0);
-        let n = CTR.fetch_add(1, Ordering::SeqCst);
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "agentsdb_cli_compile_test_{}_{}",
-            std::process::id(),
-            n
-        ));
-        std::fs::create_dir_all(&p).expect("create temp dir");
-        p
-    }
 
     #[test]
     fn compile_appends_when_out_exists() {
-        let dir = make_temp_dir();
+        let dir = crate::util::make_temp_dir();
         let out = dir.join("AGENTS.db");
 
         let mut input1 = CompileInput {

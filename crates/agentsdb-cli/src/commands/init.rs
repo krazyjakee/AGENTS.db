@@ -158,25 +158,10 @@ pub(crate) fn cmd_init(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn make_temp_dir() -> PathBuf {
-        static CTR: AtomicUsize = AtomicUsize::new(0);
-        let n = CTR.fetch_add(1, Ordering::SeqCst);
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "agentsdb_cli_init_test_{}_{}",
-            std::process::id(),
-            n
-        ));
-        std::fs::create_dir_all(&p).expect("create temp dir");
-        p
-    }
 
     #[test]
     fn init_does_not_modify_readme() {
-        let root = make_temp_dir();
+        let root = crate::util::make_temp_dir();
         let readme_path = root.join("README.md");
         let original = "# Title\n\nSome content.\n";
         std::fs::write(&readme_path, original).expect("write README");
@@ -197,7 +182,7 @@ mod tests {
 
     #[test]
     fn init_appends_agent_notes_when_missing() {
-        let root = make_temp_dir();
+        let root = crate::util::make_temp_dir();
 
         std::fs::write(root.join(".gitignore"), "target/\n").expect("write .gitignore");
         std::fs::write(root.join("README.md"), "# Title\n").expect("write README");

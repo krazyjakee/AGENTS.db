@@ -2,6 +2,8 @@ use anyhow::Context;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agentsdb_core::types::LayerId;
 
@@ -202,19 +204,57 @@ pub(crate) fn one_line(s: &str) -> String {
     out
 }
 
+pub(crate) fn fmt_u64_commas(mut v: u64) -> String {
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut parts = Vec::new();
+    while v > 0 {
+        parts.push((v % 1000) as u16);
+        v /= 1000;
+    }
+    let mut out = String::new();
+    for (i, part) in parts.iter().rev().enumerate() {
+        if i == 0 {
+            out.push_str(&part.to_string());
+        } else {
+            out.push_str(&format!(",{:03}", part));
+        }
+    }
+    out
+}
+
+pub(crate) fn fmt_bytes_human(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{bytes} B");
+    }
+    if value >= 10.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn make_temp_dir() -> PathBuf {
+    static CTR: AtomicUsize = AtomicUsize::new(0);
+    let n = CTR.fetch_add(1, Ordering::SeqCst);
+    let mut p = std::env::temp_dir();
+    p.push(format!("agentsdb_cli_test_{}_{}", std::process::id(), n));
+    std::fs::create_dir_all(&p).expect("create temp dir");
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn make_temp_dir() -> PathBuf {
-        static CTR: AtomicUsize = AtomicUsize::new(0);
-        let n = CTR.fetch_add(1, Ordering::SeqCst);
-        let mut p = std::env::temp_dir();
-        p.push(format!("agentsdb_cli_test_{}_{}", std::process::id(), n));
-        std::fs::create_dir_all(&p).expect("create temp dir");
-        p
-    }
 
     #[test]
     fn init_collects_common_doc_extensions() {

@@ -277,17 +277,6 @@ fn path_to_string(p: PathBuf) -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn make_temp_dir() -> PathBuf {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("agentsdb-cli-compact-{n}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
 
     fn schema() -> agentsdb_format::LayerSchema {
         agentsdb_format::LayerSchema {
@@ -312,7 +301,7 @@ mod tests {
 
     #[test]
     fn compacts_base_plus_user() {
-        let dir = make_temp_dir();
+        let dir = crate::util::make_temp_dir();
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
         let out_path = dir.join("AGENTS.compacted.db");
@@ -347,7 +336,7 @@ mod tests {
 
     #[test]
     fn rejects_conflicting_ids_with_different_contents() {
-        let dir = make_temp_dir();
+        let dir = crate::util::make_temp_dir();
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
 
@@ -365,7 +354,7 @@ mod tests {
 
     #[test]
     fn compact_all_in_dir_rewrites_all_valid_db_files() {
-        let dir = make_temp_dir();
+        let dir = crate::util::make_temp_dir();
         let a_path = dir.join("AGENTS.db");
         let b_path = dir.join("AGENTS.user.db");
         let junk_path = dir.join("junk.db");

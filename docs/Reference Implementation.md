@@ -167,7 +167,7 @@ Commands (suggested):
 - `agentsdb diff`
 - `agentsdb inspect`
 - `agentsdb promote`
-- `agentsdb compact` (optional for v0.1; can be stubbed)
+- `agentsdb compact`
 - `agentsdb validate` (format validator; RECOMMENDED)
 
 Acceptance criteria:

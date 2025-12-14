@@ -93,21 +93,10 @@ fn is_agents_db_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn make_temp_dir() -> PathBuf {
-        static CTR: AtomicUsize = AtomicUsize::new(0);
-        let n = CTR.fetch_add(1, Ordering::SeqCst);
-        let mut p = std::env::temp_dir();
-        p.push(format!("agentsdb_clean_test_{}_{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).expect("create temp dir");
-        p
-    }
 
     #[test]
     fn clean_removes_agents_db_files_recursively() {
-        let root = make_temp_dir();
+        let root = crate::util::make_temp_dir();
         std::fs::create_dir_all(root.join("nested")).expect("create nested");
 
         std::fs::write(root.join("AGENTS.db"), "x").expect("write AGENTS.db");
@@ -130,7 +119,7 @@ mod tests {
 
     #[test]
     fn clean_dry_run_does_not_delete() {
-        let root = make_temp_dir();
+        let root = crate::util::make_temp_dir();
         std::fs::write(root.join("AGENTS.db"), "x").expect("write AGENTS.db");
 
         cmd_clean(root.to_str().unwrap(), true, false).expect("dry-run should succeed");
