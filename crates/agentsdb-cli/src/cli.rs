@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "agentsdb",
     version,
-    about = "AGENTS.db tooling (v0.1.2)",
+    ${1}0.1.3${2},
     long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - `search --query` uses a deterministic hash embedding (not a semantic model)."
 )]
 pub(crate) struct Cli {
@@ -31,30 +31,6 @@ pub(crate) enum Command {
         root: String,
         /// Output layer path to write.
         #[arg(long, default_value = "AGENTS.db")]
-        out: String,
-        /// Chunk kind to assign to collected files.
-        #[arg(long, default_value = "canonical")]
-        kind: String,
-        /// Embedding dimension for the emitted schema.
-        #[arg(long, default_value_t = 128)]
-        dim: u32,
-        /// Embedding element type: `f32` or `i8`.
-        #[arg(long, default_value = "f32")]
-        element_type: String,
-        /// Quantization scale (only used when `--element-type i8`).
-        #[arg(long)]
-        quant_scale: Option<f32>,
-    },
-    /// Collect files and emit a compile JSON payload.
-    Collect {
-        /// Root directory to search for files.
-        #[arg(long, default_value = ".")]
-        root: String,
-        /// File names to include (repeatable).
-        #[arg(long = "include", default_value = "AGENTS.md")]
-        includes: Vec<String>,
-        /// Output path for the generated JSON.
-        #[arg(long)]
         out: String,
         /// Chunk kind to assign to collected files.
         #[arg(long, default_value = "canonical")]
@@ -101,14 +77,38 @@ pub(crate) enum Command {
         #[arg(long)]
         local: Option<String>,
     },
-    /// Compile a JSON payload into an on-disk layer file.
+    /// Compile text and/or files into an on-disk layer file.
     Compile {
-        /// Input JSON path (from `collect` or manually authored).
+        /// Optional input JSON path (legacy; previously produced by `collect`).
         #[arg(long = "in")]
-        input: String,
+        input: Option<String>,
         /// Output layer path to write.
         #[arg(long)]
         out: String,
+        /// Root directory to search for files when no PATHs are provided.
+        #[arg(long, default_value = ".")]
+        root: String,
+        /// File names to include (repeatable) when no PATHs are provided.
+        #[arg(long = "include", default_value = "AGENTS.md")]
+        includes: Vec<String>,
+        /// File paths to include (repeatable positional args).
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
+        /// Inline text chunks to include (repeatable).
+        #[arg(long = "text")]
+        texts: Vec<String>,
+        /// Chunk kind to assign to generated chunks.
+        #[arg(long, default_value = "canonical")]
+        kind: String,
+        /// Embedding dimension for the emitted schema.
+        #[arg(long, default_value_t = 128)]
+        dim: u32,
+        /// Embedding element type: `f32` or `i8`.
+        #[arg(long, default_value = "f32")]
+        element_type: String,
+        /// Quantization scale (only used when `--element-type i8`).
+        #[arg(long)]
+        quant_scale: Option<f32>,
     },
     /// Append a chunk to a writable layer file.
     Write {
@@ -308,6 +308,66 @@ mod tests {
                 assert_eq!(bind, "127.0.0.1:3030");
             }
             _ => panic!("expected web command"),
+        }
+    }
+
+    #[test]
+    fn compile_accepts_paths_and_text() {
+        let cli = Cli::try_parse_from([
+            "agentsdb",
+            "compile",
+            "--out",
+            "AGENTS.db",
+            "--text",
+            "hello",
+            "README.md",
+        ])
+        .expect("parse should succeed");
+        match cli.cmd {
+            Command::Compile {
+                input,
+                out,
+                root,
+                includes,
+                paths,
+                texts,
+                kind,
+                dim,
+                element_type,
+                quant_scale,
+            } => {
+                assert_eq!(input, None);
+                assert_eq!(out, "AGENTS.db");
+                assert_eq!(root, ".");
+                assert_eq!(includes, vec!["AGENTS.md".to_string()]);
+                assert_eq!(paths, vec!["README.md".to_string()]);
+                assert_eq!(texts, vec!["hello".to_string()]);
+                assert_eq!(kind, "canonical");
+                assert_eq!(dim, 128);
+                assert_eq!(element_type, "f32");
+                assert_eq!(quant_scale, None);
+            }
+            _ => panic!("expected compile command"),
+        }
+    }
+
+    #[test]
+    fn compile_accepts_legacy_in() {
+        let cli = Cli::try_parse_from([
+            "agentsdb",
+            "compile",
+            "--in",
+            "build/input.json",
+            "--out",
+            "AGENTS.db",
+        ])
+        .expect("parse should succeed");
+        match cli.cmd {
+            Command::Compile { input, out, .. } => {
+                assert_eq!(input, Some("build/input.json".to_string()));
+                assert_eq!(out, "AGENTS.db");
+            }
+            _ => panic!("expected compile command"),
         }
     }
 }

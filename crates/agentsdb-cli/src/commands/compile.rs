@@ -1,12 +1,46 @@
 use agentsdb_core::embed::hash_embed;
 use anyhow::Context;
 use serde::Serialize;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
-use crate::types::{CompileInput, CompileSource};
+use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
+use crate::util::{assign_stable_id, collect_files};
 
-pub(crate) fn cmd_compile(input: &str, out: &str, json: bool) -> anyhow::Result<()> {
-    let s = std::fs::read_to_string(input).with_context(|| format!("read {input}"))?;
-    let mut input: CompileInput = serde_json::from_str(&s).context("parse compile input JSON")?;
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cmd_compile(
+    input_json: Option<&str>,
+    out: &str,
+    root: &str,
+    includes: &[String],
+    paths: &[String],
+    texts: &[String],
+    kind: &str,
+    dim: u32,
+    element_type: &str,
+    quant_scale: Option<f32>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let mut input = if let Some(input_json) = input_json {
+        if !paths.is_empty() || !texts.is_empty() {
+            anyhow::bail!("--in cannot be combined with PATHs or --text");
+        }
+        let s =
+            std::fs::read_to_string(input_json).with_context(|| format!("read {}", input_json))?;
+        serde_json::from_str(&s).context("parse compile input JSON")?
+    } else {
+        compile_input_from_sources(
+            root,
+            includes,
+            paths,
+            texts,
+            kind,
+            dim,
+            element_type,
+            quant_scale,
+        )?
+    };
+
     let chunks = compile_to_layer(&mut input, out).context("compile")?;
 
     if json {
@@ -26,6 +60,99 @@ pub(crate) fn cmd_compile(input: &str, out: &str, json: bool) -> anyhow::Result<
         println!("Wrote {out} ({chunks} chunks)");
     }
     Ok(())
+}
+
+fn compile_input_from_sources(
+    root: &str,
+    includes: &[String],
+    paths: &[String],
+    texts: &[String],
+    kind: &str,
+    dim: u32,
+    element_type: &str,
+    quant_scale: Option<f32>,
+) -> anyhow::Result<CompileInput> {
+    if dim == 0 {
+        anyhow::bail!("--dim must be non-zero");
+    }
+    if element_type != "f32" && element_type != "i8" {
+        anyhow::bail!("--element-type must be 'f32' or 'i8'");
+    }
+
+    let schema = CompileSchema {
+        dim,
+        element_type: element_type.to_string(),
+        quant_scale: quant_scale.or_else(|| (element_type == "i8").then_some(1.0)),
+    };
+
+    let cwd = std::env::current_dir().ok();
+    let mut used_ids = BTreeSet::new();
+    let mut chunks = Vec::new();
+
+    for (i, content) in texts.iter().enumerate() {
+        let label = format!("inline:{}", i + 1);
+        let label_path = Path::new(&label);
+        let id = assign_stable_id(label_path, content, &mut used_ids);
+        chunks.push(CompileChunk {
+            id,
+            kind: kind.to_string(),
+            content: content.clone(),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: None,
+            sources: vec![CompileSource::String(format!("{label}:1"))],
+        });
+    }
+
+    let file_paths: Vec<(PathBuf, PathBuf)> = if paths.is_empty() {
+        let root_path = Path::new(root);
+        collect_files(root_path, includes)?
+            .into_iter()
+            .map(|rel| (root_path.join(&rel), rel))
+            .collect()
+    } else {
+        paths
+            .iter()
+            .map(|p| {
+                let p = PathBuf::from(p);
+                let abs = match (&cwd, p.is_absolute()) {
+                    (_, true) => p.clone(),
+                    (Some(cwd), false) => cwd.join(&p),
+                    (None, false) => p.clone(),
+                };
+                let rel = match (&cwd, p.is_absolute()) {
+                    (Some(cwd), true) => p.strip_prefix(cwd).unwrap_or(&p).to_path_buf(),
+                    _ => p,
+                };
+                (abs, rel)
+            })
+            .collect()
+    };
+
+    for (abs, rel) in file_paths {
+        let bytes = std::fs::read(&abs).with_context(|| format!("read bytes {}", abs.display()))?;
+        let content = String::from_utf8_lossy(&bytes).to_string();
+        let id = assign_stable_id(&rel, &content, &mut used_ids);
+        chunks.push(CompileChunk {
+            id,
+            kind: kind.to_string(),
+            content,
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: None,
+            sources: vec![CompileSource::String(format!("{}:1", rel.display()))],
+        });
+    }
+
+    if chunks.is_empty() {
+        anyhow::bail!(
+            "no chunks to compile (provide PATHs and/or --text, or use --root/--include)"
+        );
+    }
+
+    Ok(CompileInput { schema, chunks })
 }
 
 pub(crate) fn compile_to_layer(input: &mut CompileInput, out: &str) -> anyhow::Result<usize> {

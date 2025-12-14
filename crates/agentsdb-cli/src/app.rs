@@ -19,24 +19,6 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             quant_scale,
             cli.json,
         ),
-        Command::Collect {
-            root,
-            includes,
-            out,
-            kind,
-            dim,
-            element_type,
-            quant_scale,
-        } => crate::commands::collect::cmd_collect(
-            &root,
-            &includes,
-            &out,
-            &kind,
-            dim,
-            &element_type,
-            quant_scale,
-            cli.json,
-        ),
         Command::Validate { path } => crate::commands::validate::cmd_validate(&path, cli.json),
         Command::Inspect { layer, id, path } => {
             crate::commands::inspect::cmd_inspect(layer.as_deref(), path.as_deref(), id, cli.json)
@@ -57,9 +39,30 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 local,
             })
         }
-        Command::Compile { input, out } => {
-            crate::commands::compile::cmd_compile(&input, &out, cli.json)
-        }
+        Command::Compile {
+            input,
+            out,
+            root,
+            includes,
+            paths,
+            texts,
+            kind,
+            dim,
+            element_type,
+            quant_scale,
+        } => crate::commands::compile::cmd_compile(
+            input.as_deref(),
+            &out,
+            &root,
+            &includes,
+            &paths,
+            &texts,
+            &kind,
+            dim,
+            &element_type,
+            quant_scale,
+            cli.json,
+        ),
         Command::Write {
             path,
             scope,

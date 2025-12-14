@@ -45,21 +45,10 @@ Shortcut (wide net docs + compile, no manifest left behind):
 agentsdb init
 ```
 
-Collect sources into a JSON manifest:
+Compile canonical sources into the base layer (no manifest left behind):
 
 ```sh
-agentsdb collect \
-  --root . \
-  --include AGENTS.md \
-  --out build/agents.sources.json \
-  --dim 128 \
-  --element-type f32
-```
-
-Compile that manifest into the base layer:
-
-```sh
-agentsdb compile --in build/agents.sources.json --out AGENTS.db
+agentsdb compile --root . --include AGENTS.md --out AGENTS.db --dim 128 --element-type f32
 ```
 
 ✅ Produces: `AGENTS.db` (Base layer)  
@@ -208,7 +197,7 @@ agentsdb validate AGENTS.delta.db  # if present
 ```
 [ Canonical sources (e.g. AGENTS.md) ]
               ↓
-[ agentsdb collect + agentsdb compile ]
+[ agentsdb compile ]
               ↓
 [ Base / Local / Delta / User layers ]
               ↓

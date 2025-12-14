@@ -1,5 +1,4 @@
 pub(crate) mod clean;
-pub(crate) mod collect;
 pub(crate) mod compact;
 pub(crate) mod compile;
 pub(crate) mod diff;

@@ -161,8 +161,8 @@ Goals:
 - Support the example flows in `docs/RFC.md` with concrete commands.
 
 Commands (suggested):
-- `agentsdb collect`
 - `agentsdb compile`
+- `agentsdb init`
 - `agentsdb serve`
 - `agentsdb diff`
 - `agentsdb inspect`

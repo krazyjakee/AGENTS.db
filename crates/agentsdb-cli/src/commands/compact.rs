@@ -130,7 +130,11 @@ fn default_out_path(base: Option<&str>, user: Option<&str>) -> Option<String> {
         .and_then(|p| Path::new(p).parent())
         .map(ToOwned::to_owned);
     let dir = base_dir.or(user_dir)?;
-    Some(dir.join("AGENTS.compacted.db").to_string_lossy().into_owned())
+    Some(
+        dir.join("AGENTS.compacted.db")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 fn compact_layers(
@@ -379,9 +383,6 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
 
-        assert_eq!(
-            rendered,
-            HashSet::from(["AGENTS.user.db".to_string()])
-        );
+        assert_eq!(rendered, HashSet::from(["AGENTS.user.db".to_string()]));
     }
 }

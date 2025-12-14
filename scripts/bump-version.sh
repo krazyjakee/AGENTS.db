@@ -54,11 +54,18 @@ fi
 echo ""
 echo "Updating versions..."
 
+# Portable in-place edit helper (works on macOS and Linux).
+perl_inplace() {
+    local expr="$1"
+    local file="$2"
+    perl -pi -e "$expr" "$file"
+}
+
 # Update all Cargo.toml files in crates/
 for cargo_file in crates/*/Cargo.toml; do
     if [ -f "$cargo_file" ]; then
         echo "  - Updating $cargo_file"
-        sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$cargo_file"
+        perl_inplace "s/^version = \\\".*\\\"/version = \\\"$NEW_VERSION\\\"/" "$cargo_file"
     fi
 done
 
@@ -66,7 +73,7 @@ done
 CLI_FILE="crates/agentsdb-cli/src/cli.rs"
 if [ -f "$CLI_FILE" ]; then
     echo "  - Updating $CLI_FILE"
-    sed -i "s/about = \"AGENTS\.db tooling (v.*)\"/about = \"AGENTS.db tooling (v$NEW_VERSION)\"/" "$CLI_FILE"
+    perl_inplace "s/(about = \\\"AGENTS\\.db tooling \\(v)[^\\)]*(\\)\\\")/\\\${1}$NEW_VERSION\\\${2}/" "$CLI_FILE"
 else
     echo -e "${RED}Error: $CLI_FILE not found${NC}"
     exit 1

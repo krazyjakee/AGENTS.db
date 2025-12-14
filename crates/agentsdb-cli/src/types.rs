@@ -114,34 +114,3 @@ pub(crate) enum CompileSource {
     String(String),
     Chunk { chunk_id: u32 },
 }
-
-#[derive(Serialize)]
-pub(crate) struct CollectOutput {
-    pub(crate) schema: CompileSchemaOut,
-    pub(crate) chunks: Vec<CollectChunk>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct CompileSchemaOut {
-    pub(crate) dim: u32,
-    pub(crate) element_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) quant_scale: Option<f32>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct CollectChunk {
-    pub(crate) id: u32,
-    pub(crate) kind: String,
-    pub(crate) content: String,
-    pub(crate) author: String,
-    pub(crate) confidence: f32,
-    pub(crate) created_at_unix_ms: u64,
-    pub(crate) sources: Vec<CollectSource>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub(crate) enum CollectSource {
-    String(String),
-}

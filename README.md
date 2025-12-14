@@ -80,25 +80,18 @@ agentsdb init
 
 #### Or manually collect and compile canonical sources
 
-This scans your repo for source files (by default `AGENTS.md`) and produces a JSON manifest that `compile` understands.
+Compile directly from file paths and/or inline text (no intermediate JSON manifest).
 
 ```sh
-agentsdb collect \
-  --root . \
-  --include AGENTS.md \
-  --out build/agents.sources.json \
-  --dim 128 \
-  --element-type f32
+agentsdb compile --out AGENTS.db --dim 128 --element-type f32 AGENTS.md docs/RFC.md
 ```
 
 ```sh
-agentsdb compile \
-  --in build/agents.sources.json \
-  --out AGENTS.db
+agentsdb compile --out AGENTS.db --text "Project note: layers are append-only."
 ```
 
 Notes:
-- If the manifest doesn’t include embeddings, `compile` uses a deterministic built-in hash embedder (handy for local/dev).
+- If embeddings aren’t provided, `compile` uses a deterministic built-in hash embedder (handy for local/dev).
 
 ### 3) Validate and inspect a layer file
 

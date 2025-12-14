@@ -426,11 +426,8 @@ This section illustrates end-to-end workflows. Command names are examples only.
 Example CLI-style flow:
 
 ```sh
-# Extract canonical sources into an input manifest.
-agentsdb collect --root . --include 'AGENTS.md' --out build/agents.sources.json
-
-# Compile to an immutable base layer.
-agentsdb compile --in build/agents.sources.json --out AGENTS.db
+# Compile canonical sources directly (no manifest left behind).
+agentsdb compile --root . --include 'AGENTS.md' --out AGENTS.db
 
 # Optional signing step.
 agentsdb sign --in AGENTS.db --out AGENTS.db.sig
