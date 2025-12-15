@@ -148,7 +148,7 @@ Work items:
   - Append to the corresponding layer.
   - Return assigned `context_id` (chunk id).
 - Implement `agents_context_propose`:
-  - Record a promotion request (v0.1: append a “proposal” record to delta or a sidecar log).
+  - Record a promotion request by appending a `meta.proposal_event` chunk to `AGENTS.delta.db` (no sidecar files).
   - Enforce `target: user`.
 
 Acceptance criteria:

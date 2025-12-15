@@ -3,6 +3,10 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use agentsdb_embeddings::config::{
+    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
+};
+
 use crate::commands::compile::compile_to_layer;
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
 use crate::util::{assign_stable_id, collect_files_wide_docs};
@@ -83,12 +87,32 @@ pub(crate) fn cmd_init(
     root: &str,
     out: &str,
     kind: &str,
-    dim: u32,
+    dim: Option<u32>,
     element_type: &str,
     quant_scale: Option<f32>,
     json: bool,
 ) -> anyhow::Result<()> {
-    if dim == 0 {
+    let resolved_dim = match dim {
+        Some(v) => v,
+        None => {
+            let out_path = Path::new(out);
+            let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
+            let siblings = standard_layer_paths_for_dir(out_dir);
+            let options = roll_up_embedding_options_from_paths(
+                Some(siblings.local.as_path()),
+                Some(siblings.user.as_path()),
+                Some(siblings.delta.as_path()),
+                Some(siblings.base.as_path()),
+            )
+            .context("roll up options")?;
+            options
+                .dim
+                .map(|v| u32::try_from(v).context("configured dim overflows u32"))
+                .transpose()?
+                .unwrap_or(128)
+        }
+    };
+    if resolved_dim == 0 {
         anyhow::bail!("--dim must be non-zero");
     }
     if element_type != "f32" && element_type != "i8" {
@@ -126,7 +150,7 @@ pub(crate) fn cmd_init(
 
     let mut input = CompileInput {
         schema: CompileSchema {
-            dim,
+            dim: resolved_dim,
             element_type: element_type.to_string(),
             quant_scale: quant_scale.or_else(|| (element_type == "i8").then_some(1.0)),
         },
@@ -172,7 +196,7 @@ mod tests {
         let out_path = root.join("AGENTS.test.db");
         let root_s = root.to_string_lossy().to_string();
         let out_s = out_path.to_string_lossy().to_string();
-        cmd_init(&root_s, &out_s, "docs", 8, "f32", None, true).expect("init should succeed");
+        cmd_init(&root_s, &out_s, "docs", Some(8), "f32", None, true).expect("init should succeed");
 
         let after = std::fs::read_to_string(&readme_path).expect("read README");
         assert_eq!(after, original);
@@ -196,7 +220,7 @@ mod tests {
         let out_path = root.join("AGENTS.test.db");
         let root_s = root.to_string_lossy().to_string();
         let out_s = out_path.to_string_lossy().to_string();
-        cmd_init(&root_s, &out_s, "docs", 8, "f32", None, true).expect("init should succeed");
+        cmd_init(&root_s, &out_s, "docs", Some(8), "f32", None, true).expect("init should succeed");
 
         let agents_after = std::fs::read_to_string(&agents_path).expect("read AGENTS");
         assert!(agents_after.contains("## Agent-Specific Notes"));
@@ -214,6 +238,41 @@ mod tests {
             !root.join("GEMINI.md").exists(),
             "init should not create missing files"
         );
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn init_uses_configured_dim_when_dim_is_omitted() {
+        let root = crate::util::make_temp_dir();
+        std::fs::write(root.join(".gitignore"), "target/\n").expect("write .gitignore");
+        std::fs::write(root.join("README.md"), "# Title\n").expect("write README");
+
+        let root_s = root.to_string_lossy().to_string();
+        crate::commands::options::cmd_options_set(
+            &root_s,
+            "local",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(8),
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .expect("write options");
+
+        let out_path = root.join("AGENTS.test.db");
+        let out_s = out_path.to_string_lossy().to_string();
+        cmd_init(&root_s, &out_s, "docs", None, "f32", None, true).expect("init should succeed");
+
+        let file = agentsdb_format::LayerFile::open(&out_path).expect("open out layer");
+        let schema = agentsdb_format::schema_of(&file);
+        assert_eq!(schema.dim, 8);
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }

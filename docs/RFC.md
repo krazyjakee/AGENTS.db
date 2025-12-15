@@ -436,6 +436,8 @@ An MCP server conforming to this document MUST implement `agents_context_propose
 
 - `target` MUST be `user`.
 - Promotion MUST require human or CI approval.
+- The server MUST record the proposal as durable, append-only state inside a layer file (RECOMMENDED: append a `meta.proposal_event` chunk to `AGENTS.delta.db` with `sources` referencing the proposed `context_id`).
+- Implementations MUST NOT create or rely on standalone JSON/JSONL “sidecar” files to record proposals or other durable workflow state; any durable state worth keeping MUST live inside `.db` layer files.
 
 Note: Implementations MAY also accept the legacy dot-separated alias `agents.context.propose`.
 

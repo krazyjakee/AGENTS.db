@@ -523,6 +523,253 @@ fn diff_and_promote_json_flow() {
 }
 
 #[test]
+fn diff_target_user_reports_conflicts() {
+    let dir = TempDir::new("agentsdb_e2e_diff_target_user");
+
+    let base_in = dir.path().join("base_in.json");
+    let delta_in = dir.path().join("delta_in.json");
+    let user_in = dir.path().join("user_in.json");
+
+    std::fs::write(
+        &base_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 1, "kind": "canonical", "content": "base one", "author": "human", "confidence": 1.0, "created_at_unix_ms": 0, "embedding": null, "sources": [] },
+    { "id": 2, "kind": "note", "content": "base two", "author": "human", "confidence": 1.0, "created_at_unix_ms": 0, "embedding": null, "sources": [] }
+  ]
+}
+"#,
+    )
+    .expect("write base input");
+    std::fs::write(
+        &delta_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 2, "kind": "note", "content": "delta overrides two", "author": "mcp", "confidence": 0.5, "created_at_unix_ms": 0, "embedding": null, "sources": [] },
+    { "id": 3, "kind": "note", "content": "delta new three", "author": "mcp", "confidence": 0.5, "created_at_unix_ms": 0, "embedding": null, "sources": [] }
+  ]
+}
+"#,
+    )
+    .expect("write delta input");
+    std::fs::write(
+        &user_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 3, "kind": "note", "content": "already accepted", "author": "human", "confidence": 1.0, "created_at_unix_ms": 0, "embedding": null, "sources": [] }
+  ]
+}
+"#,
+    )
+    .expect("write user input");
+
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            base_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.base.db",
+            "--replace",
+        ],
+    );
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            delta_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.delta.db",
+            "--replace",
+        ],
+    );
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            user_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.user.db",
+            "--replace",
+        ],
+    );
+
+    let diff = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "diff",
+            "--base",
+            "AGENTS.base.db",
+            "--delta",
+            "AGENTS.delta.db",
+            "--target",
+            "user",
+            "--user",
+            "AGENTS.user.db",
+        ],
+    );
+    assert_eq!(diff["target"].as_str(), Some("user"));
+    assert_eq!(diff["target_conflicts"][0].as_u64(), Some(3));
+}
+
+#[test]
+fn promote_detects_duplicates_and_can_skip() {
+    let dir = TempDir::new("agentsdb_e2e_promote_skip_existing");
+
+    let delta_in = dir.path().join("delta_in.json");
+    let user_in = dir.path().join("user_in.json");
+
+    std::fs::write(
+        &delta_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 2, "kind": "note", "content": "delta two", "author": "mcp", "confidence": 0.5, "created_at_unix_ms": 0, "embedding": null, "sources": [] }
+  ]
+}
+"#,
+    )
+    .expect("write delta input");
+    std::fs::write(
+        &user_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 2, "kind": "note", "content": "already accepted", "author": "human", "confidence": 1.0, "created_at_unix_ms": 0, "embedding": null, "sources": [] }
+  ]
+}
+"#,
+    )
+    .expect("write user input");
+
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            delta_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.delta.db",
+            "--replace",
+        ],
+    );
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            user_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.user.db",
+            "--replace",
+        ],
+    );
+
+    run_err(
+        dir.path(),
+        &[
+            "promote",
+            "--from",
+            "AGENTS.delta.db",
+            "--to",
+            "AGENTS.user.db",
+            "--ids",
+            "2",
+        ],
+    );
+
+    let out = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "promote",
+            "--from",
+            "AGENTS.delta.db",
+            "--to",
+            "AGENTS.user.db",
+            "--ids",
+            "2",
+            "--skip-existing",
+        ],
+    );
+    assert_eq!(out["promoted"].as_array().unwrap().len(), 0);
+    assert_eq!(out["skipped"][0].as_u64(), Some(2));
+}
+
+#[test]
+fn proposals_accept_appends_decision_record() {
+    let dir = TempDir::new("agentsdb_e2e_proposals_accept");
+
+    let delta_in = dir.path().join("delta_in.json");
+    std::fs::write(
+        &delta_in,
+        r#"
+{
+  "schema": { "dim": 8, "element_type": "f32", "quant_scale": null },
+  "chunks": [
+    { "id": 5, "kind": "note", "content": "delta five", "author": "mcp", "confidence": 0.5, "created_at_unix_ms": 0, "embedding": null, "sources": [] },
+    { "id": 6, "kind": "meta.proposal_event", "content": "{\"action\":\"propose\",\"context_id\":5,\"from_path\":\"AGENTS.delta.db\",\"to_path\":\"AGENTS.user.db\",\"created_at_unix_ms\":1,\"actor\":\"mcp\"}", "author": "mcp", "confidence": 1.0, "created_at_unix_ms": 1, "embedding": null, "sources": [{"chunk_id": 5}] }
+  ]
+}
+"#,
+    )
+    .expect("write delta input");
+
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--in",
+            delta_in.to_str().unwrap(),
+            "--out",
+            "AGENTS.delta.db",
+            "--replace",
+        ],
+    );
+    let before = run_ok_json(
+        dir.path(),
+        &["--json", "inspect", "--layer", "AGENTS.delta.db"],
+    );
+    assert_eq!(before["chunk_count"].as_u64(), Some(2));
+
+    run_ok(
+        dir.path(),
+        &["proposals", "--dir", ".", "accept", "--ids", "6", "--yes"],
+    );
+
+    let c5 = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "inspect",
+            "--layer",
+            "AGENTS.user.db",
+            "--id",
+            "5",
+        ],
+    );
+    assert_eq!(c5["id"].as_u64(), Some(5));
+
+    let after = run_ok_json(
+        dir.path(),
+        &["--json", "inspect", "--layer", "AGENTS.delta.db"],
+    );
+    assert_eq!(after["chunk_count"].as_u64(), Some(3));
+}
+
+#[test]
 fn compact_json_writes_expected_chunk_count() {
     let dir = TempDir::new("agentsdb_e2e_compact_json");
 

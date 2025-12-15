@@ -153,6 +153,8 @@ To compare Base vs Delta by chunk id:
 agentsdb diff --base AGENTS.db --delta AGENTS.delta.db
 ```
 
+If you're using the MCP server, an agent can also propose that a Delta chunk be reviewed for promotion into the User layer. These proposals are recorded as `meta.proposal_event` chunks appended to `AGENTS.delta.db` (not a sidecar file).
+
 ---
 
 ## 5. Accept Proposals (Append-Only)
@@ -161,6 +163,14 @@ Acceptance is append-only: you copy selected Delta chunks into the User layer.
 
 ```sh
 agentsdb promote --from AGENTS.delta.db --to AGENTS.user.db --ids 3,4
+```
+
+Or use the explicit proposals queue:
+
+```sh
+agentsdb proposals --dir . list
+agentsdb proposals --dir . show --id 3
+agentsdb proposals --dir . accept --ids 3,4 --yes
 ```
 
 ✅ `AGENTS.user.db` is durable and append-only  

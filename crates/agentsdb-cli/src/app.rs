@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Command, OptionsCommand};
+use crate::cli::{Cli, Command, OptionsCommand, ProposalsCommand};
 
 pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.cmd {
@@ -113,12 +113,32 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             kinds,
             cli.json,
         ),
-        Command::Diff { base, delta } => crate::commands::diff::cmd_diff(&base, &delta, cli.json),
+        Command::Diff {
+            base,
+            delta,
+            target,
+            user,
+        } => crate::commands::diff::cmd_diff(
+            &base,
+            &delta,
+            target.as_deref(),
+            user.as_deref(),
+            cli.json,
+        ),
         Command::Promote {
             from_path,
             to_path,
             ids,
-        } => crate::commands::promote::cmd_promote(&from_path, &to_path, &ids, cli.json),
+            skip_existing,
+            yes,
+        } => crate::commands::promote::cmd_promote(
+            &from_path,
+            &to_path,
+            &ids,
+            skip_existing,
+            yes,
+            cli.json,
+        ),
         Command::Compact { base, user, out } => crate::commands::compact::cmd_compact(
             base.as_deref(),
             user.as_deref(),
@@ -220,6 +240,55 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                     crate::commands::options::cmd_options_allowlist_clear(&dir, &scope, cli.json)
                 }
             },
+        },
+        Command::Proposals {
+            dir,
+            delta,
+            user,
+            proposals,
+            cmd,
+        } => match cmd {
+            ProposalsCommand::List { all } => crate::commands::proposals::cmd_proposals_list(
+                &dir,
+                delta.as_deref(),
+                user.as_deref(),
+                proposals.as_deref(),
+                all,
+                cli.json,
+            ),
+            ProposalsCommand::Show { id } => crate::commands::proposals::cmd_proposals_show(
+                &dir,
+                delta.as_deref(),
+                user.as_deref(),
+                proposals.as_deref(),
+                id,
+                cli.json,
+            ),
+            ProposalsCommand::Accept {
+                ids,
+                skip_existing,
+                yes,
+            } => crate::commands::proposals::cmd_proposals_accept(
+                &dir,
+                delta.as_deref(),
+                user.as_deref(),
+                proposals.as_deref(),
+                &ids,
+                skip_existing,
+                yes,
+                cli.json,
+            ),
+            ProposalsCommand::Reject { ids, reason } => {
+                crate::commands::proposals::cmd_proposals_reject(
+                    &dir,
+                    delta.as_deref(),
+                    user.as_deref(),
+                    proposals.as_deref(),
+                    &ids,
+                    reason.as_deref(),
+                    cli.json,
+                )
+            }
         },
     }
 }

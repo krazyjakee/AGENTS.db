@@ -237,6 +237,14 @@ enum WriteSource {
 struct ProposeParams {
     context_id: u32,
     target: String, // user
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+    #[serde(default)]
+    what: Option<String>,
+    #[serde(default, rename = "where")]
+    where_: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -412,12 +420,16 @@ fn handle_tools_list() -> Value {
             },
             {
                 "name": TOOL_AGENTS_CONTEXT_PROPOSE,
-                "description": "Propose promotion of a delta chunk of to user.",
+                "description": "Propose promotion of a delta chunk to the user layer.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "context_id": { "type": "integer" },
-                        "target": { "type": "string", "enum": ["user"] }
+                        "target": { "type": "string", "enum": ["user"] },
+                        "title": { "type": "string" },
+                        "why": { "type": "string" },
+                        "what": { "type": "string" },
+                        "where": { "type": "string" }
                     },
                     "required": ["context_id", "target"]
                 }
@@ -742,28 +754,72 @@ fn handle_propose(config: &ServerConfig, params: ProposeParams) -> anyhow::Resul
     if params.target != "user" {
         anyhow::bail!("target must be 'user'");
     }
+    const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
+
     let Some(delta_path) = &config.delta else {
         anyhow::bail!("delta layer path not configured");
     };
-    let dir = std::path::Path::new(delta_path)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let proposals = dir.join("AGENTS.proposals.jsonl");
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&proposals)?;
+
+    let delta_p = std::path::Path::new(delta_path);
+    if !delta_p.exists() {
+        anyhow::bail!("delta layer file not found at {delta_path}");
+    }
+    agentsdb_format::ensure_writable_layer_path(delta_p).context("permission check")?;
+
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+
+    let delta_file = agentsdb_format::LayerFile::open(delta_p).context("open delta layer")?;
+    let delta_chunks =
+        agentsdb_format::read_all_chunks(&delta_file).context("read delta chunks")?;
+    let Some(src) = delta_chunks.into_iter().find(|c| c.id == params.context_id) else {
+        anyhow::bail!(
+            "context_id {} not found in delta layer {}",
+            params.context_id,
+            delta_path
+        );
+    };
+
+    let from_label = delta_p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(delta_path)
+        .to_string();
+    let to_label = config
+        .user
+        .as_deref()
+        .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()))
+        .unwrap_or("AGENTS.user.db")
+        .to_string();
+
     let record = serde_json::json!({
+        "action": "propose",
         "context_id": params.context_id,
-        "target": "user",
-        "created_at_unix_ms": now_ms
+        "from_path": from_label,
+        "to_path": to_label,
+        "created_at_unix_ms": now_ms,
+        "actor": "mcp",
+        "title": params.title,
+        "why": params.why,
+        "what": params.what,
+        "where": params.where_
     });
-    writeln!(f, "{}", serde_json::to_string(&record)?)?;
-    f.sync_all()?;
+
+    let mut event_chunk = agentsdb_format::ChunkInput {
+        id: 0,
+        kind: PROPOSAL_EVENT_KIND.to_string(),
+        content: serde_json::to_string(&record).context("serialize proposal record")?,
+        author: "mcp".to_string(),
+        confidence: 1.0,
+        created_at_unix_ms: now_ms,
+        embedding: src.embedding.clone(),
+        sources: vec![agentsdb_format::ChunkSource::ChunkId(params.context_id)],
+    };
+    agentsdb_format::append_layer_atomic(delta_p, std::slice::from_mut(&mut event_chunk), None)
+        .context("append proposal event")?;
+
     Ok(serde_json::json!({ "ok": true }))
 }
 

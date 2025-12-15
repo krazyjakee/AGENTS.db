@@ -7,6 +7,7 @@ pub(crate) mod inspect;
 pub(crate) mod list;
 pub(crate) mod options;
 pub(crate) mod promote;
+pub(crate) mod proposals;
 pub(crate) mod search;
 pub(crate) mod validate;
 pub(crate) mod web;

@@ -25,6 +25,7 @@ async function refreshLayers() {
   state.selected = sel.value || (layers[0]?.path ?? "");
   await refreshMeta();
   if (state.selected) await loadChunks();
+  await refreshProposals();
 }
 
 async function refreshMeta() {
@@ -107,6 +108,104 @@ async function viewChunk(id) {
   $("viewer").style.display = "block";
   $("viewTitle").textContent = `id=${c.id} kind=${c.kind}${c.removed ? " (removed)" : ""}`;
   $("viewBody").textContent = c.content;
+  showViewActionsForChunk(c);
+}
+
+function canProposeOrPromoteCurrentView() {
+  return $("layer").value === "AGENTS.local.db" || $("layer").value === "AGENTS.user.db" || $("layer").value === "AGENTS.delta.db";
+}
+
+function showViewActionsForChunk(c) {
+  const enabled = canProposeOrPromoteCurrentView() && !c.removed;
+  $("viewActions").style.display = enabled ? "block" : "none";
+  $("viewActions").dataset.id = String(c.id);
+  setTargetSelectOptions($("promoteTarget"), $("layer").value);
+  if (!$("promoteTarget").value) {
+    $("viewActions").style.display = "none";
+  }
+  $("proposePanel").style.display = "none";
+  $("proposeTitle").value = "";
+  $("proposeWhy").value = "";
+  $("proposeWhat").value = "";
+  $("proposeWhere").value = "";
+}
+
+async function refreshProposals() {
+  const rows = await api("/api/proposals");
+  const tbody = $("proposalsTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  const pending = rows.filter(r => r.status === "pending").length;
+  $("proposalsStatus").textContent = `${pending} pending (${rows.length} total shown)`;
+  for (const p of rows) {
+    const tr = document.createElement("tr");
+    const title = (p.title || "").trim();
+    const titlePreview = title ? title : "(no title)";
+    const pendingRow = p.status === "pending";
+    const flow = `${p.from_path} → ${p.to_path}`;
+    tr.innerHTML = `
+      <td><input type="checkbox" data-prop="sel" data-id="${p.proposal_id}" ${pendingRow ? "" : "disabled"}></td>
+      <td class="mono">${p.proposal_id}</td>
+      <td class="mono">${p.context_id}</td>
+      <td class="mono">${escapeHtml(flow)}</td>
+      <td><span class="pill">${escapeHtml(p.status)}</span></td>
+      <td class="mono">${escapeHtml(titlePreview)}</td>
+      <td class="actions">
+        <button data-prop="view" data-id="${p.context_id}" data-from="${escapeAttr(p.from_path)}" class="iconOnly" title="View in source layer" aria-label="View proposal chunk">
+          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>
+            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+          </svg>
+        </button>
+        <button data-prop="accept" data-id="${p.proposal_id}" class="iconOnly secondary" title="Accept (promote)" aria-label="Accept" ${pendingRow ? "" : "disabled"}>
+          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 6L9 17l-5-5"/>
+          </svg>
+        </button>
+        <button data-prop="reject" data-id="${p.proposal_id}" class="iconOnly secondary" title="Reject" aria-label="Reject" ${pendingRow ? "" : "disabled"}>
+          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M18 6L6 18"/>
+            <path d="M6 6l12 12"/>
+          </svg>
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function selectedProposalIds() {
+  const inputs = $("proposalsTable").querySelectorAll('input[type="checkbox"][data-prop="sel"]');
+  const ids = [];
+  for (const el of inputs) {
+    if (el.checked) ids.push(Number(el.getAttribute("data-id")));
+  }
+  return ids;
+}
+
+async function acceptProposalIds(ids) {
+  if (!ids.length) { alert("No proposals selected."); return; }
+  const skipExisting = confirm("Skip ids already present in the destination layer?");
+  const out = await api("/api/proposals/accept", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids, skip_existing: skipExisting }),
+  });
+  if (out && out.out_path) {
+    alert(`Wrote ${out.out_path} (base is read-only; replace AGENTS.db manually if desired).`);
+  }
+  await refreshLayers();
+  await refreshProposals();
+}
+
+async function rejectProposalIds(ids) {
+  if (!ids.length) { alert("No proposals selected."); return; }
+  const reason = prompt("Reject reason (optional):") || "";
+  await api("/api/proposals/reject", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids, reason: reason.trim() || undefined }),
+  });
+  await refreshProposals();
 }
 
 async function removeChunk(id) {
@@ -137,6 +236,27 @@ function writeScopeForPath(path) {
   if (path === "AGENTS.local.db") return "local";
   if (path === "AGENTS.delta.db") return "delta";
   return "";
+}
+
+function setTargetSelectOptions(selectEl, fromPath) {
+  selectEl.innerHTML = "";
+  // Common promotion paths:
+  // local -> delta|user
+  // delta -> user|base
+  // user -> delta
+  if (fromPath === "AGENTS.local.db") {
+    selectEl.innerHTML = `
+      <option value="AGENTS.user.db">AGENTS.user.db</option>
+      <option value="AGENTS.delta.db">AGENTS.delta.db</option>
+    `;
+  } else if (fromPath === "AGENTS.user.db") {
+    selectEl.innerHTML = `<option value="AGENTS.delta.db">AGENTS.delta.db</option>`;
+  } else if (fromPath === "AGENTS.delta.db") {
+    selectEl.innerHTML = `
+      <option value="AGENTS.user.db">AGENTS.user.db</option>
+      <option value="AGENTS.db">AGENTS.db</option>
+    `;
+  }
 }
 
 function setScopeSelectOptions(selectEl, path) {
@@ -189,6 +309,7 @@ document.addEventListener("keydown", (e) => {
   $("viewer").style.display = "none";
   $("addPanel").style.display = "none";
   $("editor").style.display = "none";
+  $("proposePanel").style.display = "none";
 });
 $("table").onclick = async (e) => {
   const btn = e.target.closest("button");
@@ -201,6 +322,29 @@ $("table").onclick = async (e) => {
 };
 
 refreshLayers().catch(err => setStatus(String(err)));
+
+$("refreshProposals").onclick = refreshProposals;
+$("acceptSelected").onclick = async () => { await acceptProposalIds(selectedProposalIds()); };
+$("rejectSelected").onclick = async () => { await rejectProposalIds(selectedProposalIds()); };
+
+$("proposalsTable").onclick = async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const act = btn.getAttribute("data-prop");
+  const id = Number(btn.getAttribute("data-id") || "0");
+  if (!id) return;
+  if (act === "view") {
+    const target = btn.getAttribute("data-from") || "AGENTS.delta.db";
+    if ($("layer").value !== target) {
+      $("layer").value = target;
+      await refreshMeta();
+      await loadChunks();
+    }
+    await viewChunk(id);
+  }
+  if (act === "accept") await acceptProposalIds([id]);
+  if (act === "reject") await rejectProposalIds([id]);
+};
 
 async function openEditor(id) {
   const path = $("layer").value;
@@ -243,3 +387,44 @@ async function editChunkTombstone() {
 
 $("editSubmit").onclick = editChunkSubmit;
 $("editTombstone").onclick = editChunkTombstone;
+
+$("proposeBtn").onclick = () => { $("proposePanel").style.display = "block"; };
+$("proposeCancel").onclick = () => { $("proposePanel").style.display = "none"; };
+$("proposeSubmit").onclick = async () => {
+  const id = Number($("viewActions").dataset.id || "0");
+  if (!id) return;
+  const from_path = $("layer").value;
+  const to_path = $("promoteTarget").value;
+  await api("/api/proposals/propose", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      context_id: id,
+      from_path,
+      to_path,
+      title: $("proposeTitle").value.trim() || undefined,
+      why: $("proposeWhy").value.trim() || undefined,
+      what: $("proposeWhat").value.trim() || undefined,
+      where: $("proposeWhere").value.trim() || undefined,
+    }),
+  });
+  $("proposePanel").style.display = "none";
+  await refreshProposals();
+};
+$("promoteBtn").onclick = async () => {
+  const id = Number($("viewActions").dataset.id || "0");
+  if (!id) return;
+  const skipExisting = confirm("Skip id if it's already present in destination?");
+  const from_path = $("layer").value;
+  const to_path = $("promoteTarget").value;
+  const out = await api("/api/promote/batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ from_path, to_path, ids: [id], skip_existing: skipExisting }),
+  });
+  if (out && out.out_path) {
+    alert(`Wrote ${out.out_path} (base is read-only; replace AGENTS.db manually if desired).`);
+  }
+  await refreshLayers();
+  await refreshProposals();
+};

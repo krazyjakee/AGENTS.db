@@ -34,9 +34,9 @@ pub(crate) enum Command {
         /// Chunk kind to assign to collected files.
         #[arg(long, default_value = "canonical")]
         kind: String,
-        /// Embedding dimension for the emitted schema.
-        #[arg(long, default_value_t = 128)]
-        dim: u32,
+        /// Embedding dimension for the emitted schema (defaults to configured options if present, else 128).
+        #[arg(long)]
+        dim: Option<u32>,
         /// Embedding element type: `f32` or `i8`.
         #[arg(long, default_value = "f32")]
         element_type: String,
@@ -146,7 +146,7 @@ pub(crate) enum Command {
     },
     /// Search one or more layers using vector similarity.
     #[command(
-        after_help = "Examples:\n  agentsdb search --base AGENTS.base.db --query \"how do I run tests?\"\n  agentsdb search --user AGENTS.user.db --query-vec-file query.json -k 5\n  agentsdb search --base AGENTS.base.db --delta AGENTS.delta.db --query \"rustfmt\" --kind canonical --kind note\n\nQuery modes:\n  - --query: text hashed into a deterministic embedding (fast, but not semantic).\n  - --query-vec/--query-vec-file: provide an explicit embedding as a JSON array of numbers."
+        after_help = "Examples:\n  agentsdb search --base AGENTS.base.db --query \"how do I run tests?\"\n  agentsdb search --user AGENTS.user.db --query-vec '[0.1, 0.2, 0.3]' -k 5\n  agentsdb search --base AGENTS.base.db --delta AGENTS.delta.db --query \"rustfmt\" --kind canonical --kind note\n\nQuery modes:\n  - --query: text hashed into a deterministic embedding (fast, but not semantic).\n  - --query-vec/--query-vec-file: provide an explicit embedding as a JSON array of numbers."
     )]
     Search {
         /// Path to a base layer (usually `AGENTS.base.db`).
@@ -188,6 +188,12 @@ pub(crate) enum Command {
         /// Path to the delta layer.
         #[arg(long)]
         delta: String,
+        /// Optional target layer to compare against (e.g. to preview promotion conflicts).
+        #[arg(long, value_parser = ["user"])]
+        target: Option<String>,
+        /// Path to the user layer (required when `--target user`).
+        #[arg(long)]
+        user: Option<String>,
     },
     /// Copy selected chunks from one layer into another.
     Promote {
@@ -200,6 +206,12 @@ pub(crate) enum Command {
         /// Comma-separated chunk ids to promote (e.g. `1,2,3`).
         #[arg(long)]
         ids: String, // comma-separated
+        /// Skip ids already present in the destination layer instead of erroring.
+        #[arg(long)]
+        skip_existing: bool,
+        /// Assume \"yes\" for interactive confirmation prompts.
+        #[arg(long)]
+        yes: bool,
     },
     /// Rewrite and deduplicate layer files.
     Compact {
@@ -238,6 +250,23 @@ pub(crate) enum Command {
         dir: String,
         #[command(subcommand)]
         cmd: OptionsCommand,
+    },
+    /// Review and manage MCP promotion proposals.
+    Proposals {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
+        #[arg(long)]
+        delta: Option<String>,
+        /// Override the user layer path (default: DIR/AGENTS.user.db).
+        #[arg(long)]
+        user: Option<String>,
+        /// Override the proposal-events layer path (default: the delta layer path).
+        #[arg(long)]
+        proposals: Option<String>,
+        #[command(subcommand)]
+        cmd: ProposalsCommand,
     },
 }
 
@@ -359,6 +388,43 @@ pub(crate) enum AllowlistCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub(crate) enum ProposalsCommand {
+    /// List proposals and their current status.
+    List {
+        /// Include accepted/rejected proposals (default shows only pending).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show a single proposal and its linked chunk.
+    Show {
+        /// Proposal id (chunk id of the `meta.proposal_event` record).
+        #[arg(long)]
+        id: u32,
+    },
+    /// Accept proposals by promoting their chunks into the user layer.
+    Accept {
+        /// Comma-separated proposal ids to accept.
+        #[arg(long)]
+        ids: String,
+        /// Skip ids already present in the user layer instead of erroring.
+        #[arg(long)]
+        skip_existing: bool,
+        /// Assume \"yes\" for interactive confirmation prompts.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reject proposals without promoting them.
+    Reject {
+        /// Comma-separated proposal ids to reject.
+        #[arg(long)]
+        ids: String,
+        /// Optional rejection reason to record.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub(crate) enum Toggle {
     On,
@@ -384,7 +450,7 @@ mod tests {
                 assert_eq!(root, ".");
                 assert_eq!(out, "AGENTS.db");
                 assert_eq!(kind, "canonical");
-                assert_eq!(dim, 128);
+                assert_eq!(dim, None);
                 assert_eq!(element_type, "f32");
                 assert_eq!(quant_scale, None);
             }
