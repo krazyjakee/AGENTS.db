@@ -111,6 +111,37 @@ fn write_layer_with_custom_profile(path: &Path, dim: u32, output_norm: &str) {
         .expect("write layer");
 }
 
+fn write_layer_two_chunks(path: &Path) {
+    let schema = agentsdb_format::LayerSchema {
+        dim: 2,
+        element_type: agentsdb_format::EmbeddingElementType::F32,
+        quant_scale: 1.0,
+    };
+    let chunks = [
+        agentsdb_format::ChunkInput {
+            id: 1,
+            kind: "note".to_string(),
+            content: "a".to_string(),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: vec![1.0, 0.0],
+            sources: Vec::new(),
+        },
+        agentsdb_format::ChunkInput {
+            id: 2,
+            kind: "note".to_string(),
+            content: "b".to_string(),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: vec![0.0, 1.0],
+            sources: Vec::new(),
+        },
+    ];
+    agentsdb_format::write_layer_atomic(path, &schema, &chunks, None).expect("write layer");
+}
+
 #[test]
 fn help_smoke() {
     let dir = TempDir::new("agentsdb_e2e_help");
@@ -119,6 +150,35 @@ fn help_smoke() {
     assert!(stdout.contains("Tools for creating, inspecting, and querying AGENTS.db layers."));
     assert!(stdout.contains("search"));
     assert!(stdout.contains("compile"));
+}
+
+#[test]
+fn index_builds_and_search_can_use_it() {
+    let dir = TempDir::new("agentsdb_e2e_index");
+    let base_path = dir.path().join("AGENTS.db");
+    write_layer_two_chunks(&base_path);
+
+    run_ok(
+        dir.path(),
+        &["index", "--base", "AGENTS.db", "--store-embeddings-f32"],
+    );
+    assert!(dir.path().join("AGENTS.db.agix").exists());
+
+    let v = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "search",
+            "--base",
+            "AGENTS.db",
+            "--query-vec",
+            "[1.0,0.0]",
+            "--use-index",
+            "-k",
+            "1",
+        ],
+    );
+    assert_eq!(v["results"][0]["id"].as_u64().unwrap(), 1);
 }
 
 #[test]

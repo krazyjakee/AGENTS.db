@@ -3,7 +3,7 @@ use anyhow::Context;
 use agentsdb_core::types::SearchFilters;
 use agentsdb_embeddings::config::roll_up_embedding_options;
 use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
-use agentsdb_query::{LayerSet, SearchQuery};
+use agentsdb_query::{LayerSet, SearchOptions, SearchQuery};
 
 use crate::types::{SearchJson, SearchResultJson};
 use crate::util::{layer_to_str, one_line, parse_vec_json, source_to_string};
@@ -15,6 +15,7 @@ pub(crate) fn cmd_search(
     query_vec_file: Option<String>,
     k: usize,
     kinds: Vec<String>,
+    use_index: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let opened = layers.open().context("open layers")?;
@@ -78,7 +79,9 @@ pub(crate) fn cmd_search(
         filters: SearchFilters { kinds },
     };
 
-    let results = agentsdb_query::search_layers(&opened, &query).context("search")?;
+    let results =
+        agentsdb_query::search_layers_with_options(&opened, &query, SearchOptions { use_index })
+            .context("search")?;
 
     if json {
         let out = SearchJson {

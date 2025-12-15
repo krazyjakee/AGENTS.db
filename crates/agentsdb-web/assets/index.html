@@ -14,7 +14,9 @@
         <img class="logo" src="/logo.png" alt="AGENTS.db logo">
         <div>
           <div class="brandTitle mono">AGENTS.db</div>
-          <div class="brandSub">Web interface</div>
+          <div class="brandSub">
+            Web interface <span id="webVersion" class="pill mono" title="Web UI version">v…</span>
+          </div>
         </div>
       </div>
       <div class="grow"></div>
@@ -95,6 +97,53 @@
             Writes are restricted to AGENTS.local.db / AGENTS.delta.db under the selected root.
           </div>
         </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+        <div class="row" style="align-items:flex-end">
+          <div>
+            <label>Export</label>
+            <div class="row">
+              <select id="exportFormat">
+                <option value="json">json</option>
+                <option value="ndjson">ndjson</option>
+              </select>
+              <select id="exportRedact">
+                <option value="none">redact: none</option>
+                <option value="embeddings">redact: embeddings</option>
+                <option value="content">redact: content</option>
+                <option value="all">redact: all</option>
+              </select>
+              <button id="exportBtn" class="icon secondary" title="Export selected layer" aria-label="Export">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12"/>
+                  <path d="M8 11l4 4 4-4"/>
+                  <path d="M4 21h16"/>
+                </svg>
+                Export
+              </button>
+            </div>
+            <div class="muted" style="margin-top:6px">Exports a stable JSON/NDJSON snapshot of the selected layer.</div>
+          </div>
+        </div>
+
+        <div class="row" style="align-items:flex-end; margin-top:10px">
+          <div class="grow">
+            <label>Import (append-only)</label>
+            <div class="row">
+              <input id="importFile" type="file" accept=".json,.ndjson,application/json,application/x-ndjson">
+              <select id="importScope"></select>
+              <button id="importBtn" class="icon secondary" title="Import into selected scope" aria-label="Import">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 21V9"/>
+                  <path d="M8 13l4-4 4 4"/>
+                  <path d="M4 3h16"/>
+                </svg>
+                Import
+              </button>
+            </div>
+            <div class="muted" style="margin-top:6px">Imports an export file and appends chunks to a writable layer under the root.</div>
+          </div>
+        </div>
       </section>
 
       <section class="card">
@@ -135,7 +184,7 @@
               </svg>
             </button>
           </div>
-          <pre id="viewBody" class="mono" style="white-space:pre-wrap; margin:10px 0 0"></pre>
+          <div id="viewBody" class="md" style="margin:10px 0 0"></div>
           <div id="viewActions" style="margin-top:10px; display:none">
             <label>Target layer</label>
             <select id="promoteTarget"></select>
@@ -228,7 +277,7 @@
         </div>
       </section>
 
-      <section class="card">
+      <section id="proposalsPanel" class="card">
         <div class="row">
           <div>
             <div class="mono" style="font-weight:650">Proposals</div>

@@ -113,26 +113,38 @@ pub fn append_layer_atomic(
 }
 
 pub fn ensure_writable_layer_path(path: impl AsRef<Path>) -> Result<(), Error> {
-    ensure_writable_layer_path_inner(path.as_ref(), false)
+    ensure_writable_layer_path_inner(path.as_ref(), false, false)
 }
 
 pub fn ensure_writable_layer_path_allow_user(path: impl AsRef<Path>) -> Result<(), Error> {
-    ensure_writable_layer_path_inner(path.as_ref(), true)
+    ensure_writable_layer_path_inner(path.as_ref(), true, false)
+}
+
+pub fn ensure_writable_layer_path_allow_base(path: impl AsRef<Path>) -> Result<(), Error> {
+    // Escape hatch: allow writing to AGENTS.db when explicitly requested by the caller.
+    ensure_writable_layer_path_inner(path.as_ref(), true, true)
 }
 
 pub fn read_all_chunks(file: &LayerFile) -> Result<Vec<ChunkInput>, Error> {
     decode_all_chunks(file)
 }
 
-fn ensure_writable_layer_path_inner(path: &Path, allow_user: bool) -> Result<(), Error> {
+fn ensure_writable_layer_path_inner(
+    path: &Path,
+    allow_user: bool,
+    allow_base: bool,
+) -> Result<(), Error> {
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    let forbidden = if allow_user {
-        ["AGENTS.db"].as_slice()
-    } else {
-        ["AGENTS.db", "AGENTS.user.db"].as_slice()
+    let forbidden = match (allow_user, allow_base) {
+        // Default: only local/delta allowed.
+        (false, _) => ["AGENTS.db", "AGENTS.user.db"].as_slice(),
+        // User allowed, but base still protected.
+        (true, false) => ["AGENTS.db"].as_slice(),
+        // Escape hatch: allow base + user.
+        (true, true) => [].as_slice(),
     };
     if forbidden.contains(&name) {
         return Err(PermissionError::WriteNotPermitted {

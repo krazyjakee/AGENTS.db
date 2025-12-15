@@ -6,11 +6,26 @@ use agentsdb_embeddings::config::{KIND_OPTIONS, KIND_TOMBSTONE};
 use agentsdb_format::{LayerFile, SourceRef};
 use std::collections::{HashMap, HashSet};
 
+mod index;
+pub use index::{build_layer_index, default_index_path_for_layer, IndexBuildOptions, IndexLookup};
+
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
     pub embedding: Vec<f32>,
     pub k: usize,
     pub filters: SearchFilters,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SearchOptions {
+    /// When enabled, search may use a sidecar index (if present and not stale) to accelerate exact search.
+    pub use_index: bool,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self { use_index: false }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +57,14 @@ impl LayerSet {
 pub fn search_layers(
     layers: &[(LayerId, LayerFile)],
     query: &SearchQuery,
+) -> Result<Vec<SearchResult>, Error> {
+    search_layers_with_options(layers, query, SearchOptions::default())
+}
+
+pub fn search_layers_with_options(
+    layers: &[(LayerId, LayerFile)],
+    query: &SearchQuery,
+    options: SearchOptions,
 ) -> Result<Vec<SearchResult>, Error> {
     if query.k == 0 {
         return Err(FormatError::InvalidValue {
@@ -75,6 +98,13 @@ pub fn search_layers(
 
     let layers_by_id: HashMap<LayerId, &LayerFile> =
         layers.iter().map(|(id, f)| (*id, f)).collect();
+
+    let index_lookup = if options.use_index {
+        IndexLookup::open_for_layers(layers)?
+    } else {
+        IndexLookup::empty()
+    };
+
     for (chunk_id, selected) in selection.selected.iter() {
         let layer = layers_by_id
             .get(&selected.layer)
@@ -91,8 +121,21 @@ pub fn search_layers(
             continue;
         }
 
-        layer.read_embedding_row_f32(chunk.embedding_row, &mut tmp)?;
-        let score = cosine_similarity(&query.embedding, query_norm, &tmp);
+        let score = if let Some(index) = index_lookup.index_for(selected.layer) {
+            let (row_norm, row_opt) = index.row_f32_and_norm(chunk.embedding_row)?;
+            match row_opt {
+                Some(row) => {
+                    cosine_similarity_row_norm(&query.embedding, query_norm, row, row_norm)
+                }
+                None => {
+                    layer.read_embedding_row_f32(chunk.embedding_row, &mut tmp)?;
+                    cosine_similarity_row_norm(&query.embedding, query_norm, &tmp, row_norm)
+                }
+            }
+        } else {
+            layer.read_embedding_row_f32(chunk.embedding_row, &mut tmp)?;
+            cosine_similarity(&query.embedding, query_norm, &tmp)
+        };
 
         let sources = layer
             .sources_for(chunk.rel_start, chunk.rel_count)?
@@ -264,10 +307,22 @@ fn cosine_similarity(query: &[f32], query_norm: f32, row: &[f32]) -> f32 {
     }
 }
 
+fn cosine_similarity_row_norm(query: &[f32], query_norm: f32, row: &[f32], row_norm: f32) -> f32 {
+    if query_norm == 0.0 || row_norm == 0.0 || row.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    for (a, b) in query.iter().zip(row.iter()) {
+        dot += a * b;
+    }
+    dot / (query_norm * row_norm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use agentsdb_format::EmbeddingElementType;
+    use std::path::PathBuf;
 
     fn build_layer_two_chunks_f32(one_chunk: bool) -> Vec<u8> {
         // Strings: human, mcp, kind_a, kind_b, content_a, content_b
@@ -517,5 +572,49 @@ mod tests {
         let local_1 = res.iter().find(|r| r.chunk.id.get() == 1).unwrap();
         assert_eq!(local_1.layer, LayerId::Local);
         assert_eq!(local_1.hidden_layers, vec![LayerId::Base]);
+    }
+
+    #[test]
+    fn search_with_index_matches_bruteforce() {
+        let data = build_layer_two_chunks_f32(false);
+        let dir = tempfile::tempdir().unwrap();
+        let layer_path = dir.path().join("AGENTS.db");
+        std::fs::write(&layer_path, &data).unwrap();
+
+        let layer = LayerFile::open(&layer_path).unwrap();
+        assert_eq!(
+            layer.embedding_matrix.element_type,
+            EmbeddingElementType::F32
+        );
+
+        let index_path = PathBuf::from(format!("{}.agix", layer_path.display()));
+        build_layer_index(
+            &layer,
+            &index_path,
+            IndexBuildOptions {
+                store_embeddings_even_if_f32: false,
+            },
+        )
+        .unwrap();
+
+        let layers = vec![(LayerId::Base, layer)];
+        let q = SearchQuery {
+            embedding: vec![1.0, 0.0],
+            k: 10,
+            filters: SearchFilters::default(),
+        };
+
+        let brute =
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: false }).unwrap();
+        let indexed =
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: true }).unwrap();
+
+        assert_eq!(brute.len(), indexed.len());
+        for (a, b) in brute.iter().zip(indexed.iter()) {
+            assert_eq!(a.layer, b.layer);
+            assert_eq!(a.chunk.id, b.chunk.id);
+            assert_eq!(a.chunk.kind, b.chunk.kind);
+            assert_eq!(a.chunk.content, b.chunk.content);
+        }
     }
 }

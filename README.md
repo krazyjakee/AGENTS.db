@@ -17,7 +17,7 @@ It’s designed for agent systems and MCP servers that need:
 - Clear **provenance** (who/what wrote a chunk, and what sources it came from).
 - Fast local search.
 
-This repo is currently targeting the spec is in `docs/RFC.md`.
+This repo is currently targeting the spec in `docs/RFC.md`.
 
 ## The Big Idea
 
@@ -142,6 +142,28 @@ Then search including local results:
 agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 5
 ```
 
+### 6) Import/Export (JSON/NDJSON)
+
+Export layers to a stable JSON/NDJSON format:
+
+```sh
+agentsdb export --dir . --format json --layers base,user,delta,local --out agentsdb-export.json
+```
+
+Import an export file into a writable layer (append-only):
+
+```sh
+agentsdb import --dir . --in agentsdb-export.json --target delta --dedupe
+```
+
+Dangerous escape hatch (writes to `AGENTS.db`):
+
+```sh
+agentsdb import --dir . --in agentsdb-export.json --target base --allow-base
+```
+
+See `docs/Export.md` for the schema and details.
+
 ## Options (config records)
 
 Embedding behavior is configured via append-only **options records** stored in layer files and rolled up with precedence:
@@ -235,6 +257,7 @@ Tombstones and options records are excluded from search results by default (unle
 
 - “Edit” appends a new version with the same id (and can optionally tombstone the old record).
 - “Remove” is a soft-delete (tombstone append).
+- “Export” downloads the selected layer as JSON/NDJSON; “Import” appends from an export file (append-only).
 
 ```sh
 agentsdb web --root . --bind 127.0.0.1:3030
@@ -316,6 +339,7 @@ cargo clippy --all-targets --all-features
 
 - Spec and semantics: `docs/RFC.md`
 - Planned scope: `docs/Reference Implementation.md`
+- Import/Export schema: `docs/Export.md`
 - Embeddings: `embedding.md`
 - Looking for a workflow/mental model of how to lean into this approach? See `WORKFLOW.md`
 

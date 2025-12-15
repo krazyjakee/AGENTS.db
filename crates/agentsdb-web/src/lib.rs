@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use agentsdb_core::export::{
+    ExportBundleV1, ExportChunkV1, ExportLayerSchemaV1, ExportLayerV1, ExportNdjsonRecordV1,
+    ExportSourceV1, ExportToolInfo,
+};
 use agentsdb_embeddings::config::{
     roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
 };
@@ -228,6 +232,18 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             write_response(stream, 200, "application/json", &body)
                 .context("write /api/layer/chunks")
         }
+        ("GET", "/api/version") => {
+            #[derive(Serialize)]
+            struct Out {
+                version: &'static str,
+            }
+
+            let out = Out {
+                version: env!("CARGO_PKG_VERSION"),
+            };
+            let body = serde_json::to_vec_pretty(&out)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/version")
+        }
         ("GET", "/api/layer/chunk") => {
             let layer = req
                 .query
@@ -319,6 +335,61 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             };
             let body = serde_json::to_vec_pretty(&out)?;
             write_response(stream, 200, "application/json", &body).context("write remove response")
+        }
+        ("GET", "/api/export") => {
+            let rel_path = req
+                .query
+                .get("path")
+                .context("missing query param: path")?
+                .to_string();
+            let format = req
+                .query
+                .get("format")
+                .map(String::as_str)
+                .unwrap_or("json");
+            let redact = req
+                .query
+                .get("redact")
+                .map(String::as_str)
+                .unwrap_or("none");
+            let (content_type, body) = {
+                let st = state.lock().expect("poisoned mutex");
+                let abs_path = resolve_layer_path(&st.root, &rel_path)?;
+                export_layer(abs_path.as_path(), &rel_path, format, redact)?
+            };
+            write_response(stream, 200, content_type, &body).context("write /api/export")
+        }
+        ("POST", "/api/import") => {
+            let input: ImportInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for import")?;
+            let path = input.path.clone();
+            let (imported, skipped, dry_run) = {
+                let mut st = state.lock().expect("poisoned mutex");
+                let abs_path = resolve_layer_path(&st.root, &input.path)?;
+                let out = import_into_layer(
+                    abs_path.as_path(),
+                    &input.scope,
+                    input.format.as_deref().unwrap_or("json"),
+                    &input.data,
+                    input.dry_run.unwrap_or(false),
+                    input.dedupe.unwrap_or(false),
+                    input.preserve_ids.unwrap_or(false),
+                    input.allow_base.unwrap_or(false),
+                    input.dim,
+                )?;
+                if !out.2 {
+                    st.cache.remove(&input.path);
+                }
+                out
+            };
+            let body = serde_json::to_vec_pretty(&serde_json::json!({
+                "ok": true,
+                "path": path,
+                "imported": imported,
+                "skipped": skipped,
+                "dry_run": dry_run
+            }))?;
+            write_response(stream, 200, "application/json", &body).context("write /api/import")
         }
         ("GET", "/api/proposals") => {
             let include_all = req
@@ -966,6 +1037,470 @@ fn now_unix_ms() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = vec![0u8; bytes.len() * 2];
+    for (i, b) in bytes.iter().enumerate() {
+        out[i * 2] = HEX[(b >> 4) as usize];
+        out[i * 2 + 1] = HEX[(b & 0x0f) as usize];
+    }
+    String::from_utf8(out).expect("valid hex")
+}
+
+fn content_sha256_hex(content: &str) -> String {
+    let digest = agentsdb_embeddings::cache::sha256(content.as_bytes());
+    hex_lower(&digest)
+}
+
+fn apply_redaction(
+    redact: &str,
+    content: &str,
+    embedding: &[f32],
+) -> (Option<String>, Option<Vec<f32>>) {
+    match redact {
+        "none" => (Some(content.to_string()), Some(embedding.to_vec())),
+        "content" => (None, Some(embedding.to_vec())),
+        "embeddings" => (Some(content.to_string()), None),
+        "all" => (None, None),
+        _ => (Some(content.to_string()), Some(embedding.to_vec())),
+    }
+}
+
+fn logical_layer_for_path(rel_path: &str) -> Option<&'static str> {
+    match rel_path {
+        "AGENTS.db" => Some("base"),
+        "AGENTS.user.db" => Some("user"),
+        "AGENTS.delta.db" => Some("delta"),
+        "AGENTS.local.db" => Some("local"),
+        _ => None,
+    }
+}
+
+fn export_layer(
+    abs_path: &Path,
+    rel_path: &str,
+    format: &str,
+    redact: &str,
+) -> anyhow::Result<(&'static str, Vec<u8>)> {
+    let file = LayerFile::open(abs_path).with_context(|| format!("open {}", abs_path.display()))?;
+    let layer_schema = agentsdb_format::schema_of(&file);
+    let schema = ExportLayerSchemaV1 {
+        dim: layer_schema.dim,
+        element_type: match layer_schema.element_type {
+            agentsdb_format::EmbeddingElementType::F32 => "f32".to_string(),
+            agentsdb_format::EmbeddingElementType::I8 => "i8".to_string(),
+        },
+        quant_scale: layer_schema.quant_scale,
+    };
+    let layer_metadata_json = file
+        .layer_metadata_bytes()
+        .map(|b| String::from_utf8_lossy(b).to_string());
+
+    let chunks = agentsdb_format::read_all_chunks(&file).context("read chunks")?;
+    let mut out_chunks = Vec::with_capacity(chunks.len());
+    for c in chunks {
+        let (content, embedding) = apply_redaction(redact, &c.content, &c.embedding);
+        let sources = c
+            .sources
+            .into_iter()
+            .map(|s| match s {
+                agentsdb_format::ChunkSource::ChunkId(id) => ExportSourceV1::ChunkId { id },
+                agentsdb_format::ChunkSource::SourceString(v) => {
+                    ExportSourceV1::SourceString { value: v }
+                }
+            })
+            .collect();
+        let content_sha256 = content.as_deref().map(content_sha256_hex);
+        out_chunks.push(ExportChunkV1 {
+            id: c.id,
+            kind: c.kind,
+            content,
+            author: c.author,
+            confidence: c.confidence,
+            created_at_unix_ms: c.created_at_unix_ms,
+            sources,
+            embedding,
+            content_sha256,
+        });
+    }
+
+    match format {
+        "json" => {
+            let bundle = ExportBundleV1 {
+                format: "agentsdb.export.v1".to_string(),
+                tool: ExportToolInfo {
+                    name: "agentsdb-web".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+                layers: vec![ExportLayerV1 {
+                    path: rel_path.to_string(),
+                    layer: logical_layer_for_path(rel_path).map(|s| s.to_string()),
+                    schema,
+                    layer_metadata_json,
+                    chunks: out_chunks,
+                }],
+            };
+            Ok((
+                "application/json",
+                serde_json::to_vec_pretty(&bundle).context("serialize JSON")?,
+            ))
+        }
+        "ndjson" => {
+            let mut out = Vec::new();
+            let header = ExportNdjsonRecordV1::Header {
+                format: "agentsdb.export.ndjson.v1".to_string(),
+                tool: ExportToolInfo {
+                    name: "agentsdb-web".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+            };
+            out.extend_from_slice(serde_json::to_string(&header)?.as_bytes());
+            out.push(b'\n');
+            let layer_rec = ExportNdjsonRecordV1::Layer {
+                path: rel_path.to_string(),
+                layer: logical_layer_for_path(rel_path).map(|s| s.to_string()),
+                schema,
+                layer_metadata_json,
+            };
+            out.extend_from_slice(serde_json::to_string(&layer_rec)?.as_bytes());
+            out.push(b'\n');
+            for c in out_chunks {
+                let rec = ExportNdjsonRecordV1::Chunk {
+                    layer_path: rel_path.to_string(),
+                    chunk: c,
+                };
+                out.extend_from_slice(serde_json::to_string(&rec)?.as_bytes());
+                out.push(b'\n');
+            }
+            Ok(("application/x-ndjson", out))
+        }
+        _ => anyhow::bail!("format must be json or ndjson"),
+    }
+}
+
+fn import_into_layer(
+    abs_path: &Path,
+    scope: &str,
+    format: &str,
+    data: &str,
+    dry_run: bool,
+    dedupe: bool,
+    preserve_ids: bool,
+    allow_base: bool,
+    dim: Option<u32>,
+) -> anyhow::Result<(usize, usize, bool)> {
+    match scope {
+        "local" => {
+            if abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n != "AGENTS.local.db")
+            {
+                anyhow::bail!("scope local only allowed for AGENTS.local.db");
+            }
+            agentsdb_format::ensure_writable_layer_path(abs_path).context("permission check")?;
+        }
+        "delta" => {
+            if abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n != "AGENTS.delta.db")
+            {
+                anyhow::bail!("scope delta only allowed for AGENTS.delta.db");
+            }
+            agentsdb_format::ensure_writable_layer_path(abs_path).context("permission check")?;
+        }
+        "user" => {
+            if abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n != "AGENTS.user.db")
+            {
+                anyhow::bail!("scope user only allowed for AGENTS.user.db");
+            }
+            agentsdb_format::ensure_writable_layer_path_allow_user(abs_path)
+                .context("permission check")?;
+        }
+        "base" => {
+            if !allow_base {
+                anyhow::bail!("refusing to write AGENTS.db without allow_base");
+            }
+            if abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n != "AGENTS.db")
+            {
+                anyhow::bail!("scope base only allowed for AGENTS.db");
+            }
+            agentsdb_format::ensure_writable_layer_path_allow_base(abs_path)
+                .context("permission check")?;
+        }
+        _ => anyhow::bail!("scope must be local, delta, or user"),
+    }
+
+    let mut imported: Vec<ExportChunkV1> = match format {
+        "json" => {
+            let bundle: ExportBundleV1 = serde_json::from_str(data).context("parse JSON")?;
+            bundle.layers.into_iter().flat_map(|l| l.chunks).collect()
+        }
+        "ndjson" => {
+            let mut chunks = Vec::new();
+            for (i, line) in data.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let rec: ExportNdjsonRecordV1 = serde_json::from_str(line)
+                    .with_context(|| format!("parse NDJSON line {}", i + 1))?;
+                if let ExportNdjsonRecordV1::Chunk { chunk, .. } = rec {
+                    chunks.push(chunk);
+                }
+            }
+            chunks
+        }
+        _ => anyhow::bail!("format must be json or ndjson"),
+    };
+
+    if imported.is_empty() {
+        anyhow::bail!("no chunks found in import");
+    }
+    for c in &mut imported {
+        if c.content.is_none() {
+            anyhow::bail!("import contains redacted/missing content; cannot import");
+        }
+        c.content_sha256 = Some(content_sha256_hex(c.content.as_deref().unwrap_or_default()));
+    }
+
+    let dir = abs_path.parent().unwrap_or_else(|| Path::new("."));
+    let siblings = standard_layer_paths_for_dir(dir);
+
+    let mut existing_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut existing_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let (exists, dim_usize, existing_meta) = if abs_path.exists() {
+        let file = LayerFile::open(abs_path).context("open target layer")?;
+        let chunks = agentsdb_format::read_all_chunks(&file).context("read target chunks")?;
+        if dedupe {
+            for c in &chunks {
+                existing_hashes.insert(content_sha256_hex(&c.content));
+            }
+        }
+        for c in &chunks {
+            existing_ids.insert(c.id);
+        }
+        (
+            true,
+            file.embedding_dim(),
+            file.layer_metadata_bytes().map(|b| b.to_vec()),
+        )
+    } else {
+        (false, 0usize, None)
+    };
+
+    let inferred_dim = if exists {
+        dim_usize
+    } else if let Some(d) = dim {
+        d as usize
+    } else {
+        imported
+            .iter()
+            .find_map(|c| c.embedding.as_ref().map(|e| e.len()))
+            .context("creating a new layer requires dim or input embeddings")?
+    };
+
+    let embedder_for_dim = |dim_usize: usize| -> anyhow::Result<
+        Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>,
+    > {
+        let options = roll_up_embedding_options_from_paths(
+            Some(siblings.local.as_path()),
+            Some(siblings.user.as_path()),
+            Some(siblings.delta.as_path()),
+            Some(siblings.base.as_path()),
+        )
+        .context("roll up options")?;
+        if let Some(cfg_dim) = options.dim {
+            if cfg_dim != dim_usize {
+                anyhow::bail!(
+                    "embedding dim mismatch (target dim={dim_usize}, options specify dim={cfg_dim})"
+                );
+            }
+        }
+        options
+            .into_embedder(dim_usize)
+            .context("resolve embedder from options")
+    };
+
+    let mut layer_metadata_json: Option<Vec<u8>> = None;
+    let mut embedder: Option<Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>> = None;
+
+    if !exists && preserve_ids {
+        for c in &imported {
+            if c.id == 0 {
+                anyhow::bail!("preserve_ids requires non-zero ids in input");
+            }
+            if existing_ids.contains(&c.id) {
+                anyhow::bail!("id {} already exists in target", c.id);
+            }
+            existing_ids.insert(c.id);
+        }
+    }
+
+    let mut prepared: Vec<agentsdb_format::ChunkInput> = Vec::new();
+    let mut skipped = 0usize;
+    let mut next_new_id = 1u32;
+    for c in imported {
+        let content = c.content.as_ref().expect("validated");
+        let hash = c.content_sha256.as_deref().unwrap_or_default();
+        if dedupe && existing_hashes.contains(hash) {
+            skipped += 1;
+            continue;
+        }
+        if dedupe {
+            existing_hashes.insert(hash.to_string());
+        }
+
+        let embedding = match c.embedding {
+            Some(v) => v,
+            None => {
+                if embedder.is_none() {
+                    let e = embedder_for_dim(inferred_dim)?;
+                    let meta = LayerMetadataV1::new(e.profile().clone())
+                        .with_embedder_metadata(e.metadata())
+                        .with_tool("agentsdb-web", env!("CARGO_PKG_VERSION"));
+                    layer_metadata_json =
+                        Some(meta.to_json_bytes().context("serialize layer metadata")?);
+                    embedder = Some(e);
+                }
+                let e = embedder.as_ref().expect("embedder");
+                e.embed(&[content.clone()])?
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| vec![0.0; inferred_dim])
+            }
+        };
+        if embedding.len() != inferred_dim {
+            anyhow::bail!(
+                "embedding dim mismatch in import chunk id={} (got {}, expected {})",
+                c.id,
+                embedding.len(),
+                inferred_dim
+            );
+        }
+
+        let id = if exists {
+            if preserve_ids {
+                if existing_ids.contains(&c.id) {
+                    anyhow::bail!("id {} already exists in target", c.id);
+                }
+                existing_ids.insert(c.id);
+                c.id
+            } else {
+                0
+            }
+        } else if preserve_ids {
+            c.id
+        } else {
+            while existing_ids.contains(&next_new_id) {
+                next_new_id = next_new_id.saturating_add(1);
+            }
+            existing_ids.insert(next_new_id);
+            let assigned = next_new_id;
+            next_new_id = next_new_id.saturating_add(1);
+            assigned
+        };
+
+        let sources = c
+            .sources
+            .into_iter()
+            .map(|s| match s {
+                ExportSourceV1::ChunkId { id } => agentsdb_format::ChunkSource::ChunkId(id),
+                ExportSourceV1::SourceString { value } => {
+                    agentsdb_format::ChunkSource::SourceString(value)
+                }
+            })
+            .collect();
+
+        prepared.push(agentsdb_format::ChunkInput {
+            id,
+            kind: c.kind,
+            content: content.clone(),
+            author: c.author,
+            confidence: c.confidence,
+            created_at_unix_ms: c.created_at_unix_ms,
+            embedding,
+            sources,
+        });
+    }
+
+    if let (Some(existing_meta), Some(layer_metadata_json)) =
+        (existing_meta.as_ref(), layer_metadata_json.as_ref())
+    {
+        let existing =
+            LayerMetadataV1::from_json_bytes(existing_meta).context("parse layer metadata")?;
+        let desired = LayerMetadataV1::from_json_bytes(layer_metadata_json)
+            .context("parse layer metadata")?;
+        if existing.embedding_profile != desired.embedding_profile {
+            anyhow::bail!(
+                "embedder profile mismatch vs target layer metadata (existing={:?}, current={:?})",
+                existing.embedding_profile,
+                desired.embedding_profile
+            );
+        }
+    }
+
+    let prepared_len = prepared.len();
+    if dry_run {
+        return Ok((prepared_len, skipped, true));
+    }
+
+    if prepared.is_empty() {
+        return Ok((0, skipped, false));
+    }
+
+    if exists {
+        let mut new_chunks = prepared;
+        let _ = agentsdb_format::append_layer_atomic(
+            abs_path,
+            &mut new_chunks,
+            layer_metadata_json.as_deref(),
+        )
+        .context("append")?;
+    } else {
+        let schema = agentsdb_format::LayerSchema {
+            dim: inferred_dim as u32,
+            element_type: agentsdb_format::EmbeddingElementType::F32,
+            quant_scale: 1.0,
+        };
+        agentsdb_format::write_layer_atomic(
+            abs_path,
+            &schema,
+            &prepared,
+            layer_metadata_json.as_deref(),
+        )
+        .context("create layer")?;
+    }
+
+    Ok((prepared_len, skipped, false))
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportInput {
+    path: String,
+    scope: String, // local | delta | user | base
+    #[serde(default)]
+    format: Option<String>, // json | ndjson
+    data: String,
+    #[serde(default)]
+    dry_run: Option<bool>,
+    #[serde(default)]
+    dedupe: Option<bool>,
+    #[serde(default)]
+    preserve_ids: Option<bool>,
+    #[serde(default)]
+    allow_base: Option<bool>,
+    #[serde(default)]
+    dim: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,4 +1,16 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+#[derive(Args, Clone, Debug, Default)]
+pub(crate) struct LayerArgs {
+    #[arg(long)]
+    pub(crate) base: Option<String>,
+    #[arg(long)]
+    pub(crate) user: Option<String>,
+    #[arg(long)]
+    pub(crate) delta: Option<String>,
+    #[arg(long)]
+    pub(crate) local: Option<String>,
+}
 
 #[derive(Parser)]
 #[command(
@@ -63,18 +75,8 @@ pub(crate) enum Command {
     },
     /// Run the MCP server over stdio.
     Serve {
-        /// Path to a base layer (usually `AGENTS.base.db`).
-        #[arg(long)]
-        base: Option<String>,
-        /// Path to a user layer (usually `AGENTS.user.db`).
-        #[arg(long)]
-        user: Option<String>,
-        /// Path to a delta layer (usually `AGENTS.delta.db`).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Path to a local layer (usually `AGENTS.local.db`).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
     },
     /// Compile text and/or files into an on-disk layer file.
     Compile {
@@ -149,18 +151,8 @@ pub(crate) enum Command {
         after_help = "Examples:\n  agentsdb search --base AGENTS.base.db --query \"how do I run tests?\"\n  agentsdb search --user AGENTS.user.db --query-vec '[0.1, 0.2, 0.3]' -k 5\n  agentsdb search --base AGENTS.base.db --delta AGENTS.delta.db --query \"rustfmt\" --kind canonical --kind note\n\nQuery modes:\n  - --query: text hashed into a deterministic embedding (fast, but not semantic).\n  - --query-vec/--query-vec-file: provide an explicit embedding as a JSON array of numbers."
     )]
     Search {
-        /// Path to a base layer (usually `AGENTS.base.db`).
-        #[arg(long)]
-        base: Option<String>,
-        /// Path to a user layer (usually `AGENTS.user.db`).
-        #[arg(long)]
-        user: Option<String>,
-        /// Path to a delta layer (usually `AGENTS.delta.db`).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Path to a local layer (usually `AGENTS.local.db`).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
 
         /// Text query (hashed into an embedding).
         #[arg(long)]
@@ -179,6 +171,71 @@ pub(crate) enum Command {
         /// Filter results by chunk kind (repeatable).
         #[arg(long = "kind")]
         kinds: Vec<String>,
+
+        /// Use a rebuildable sidecar index (if present) to accelerate exact search.
+        #[arg(long)]
+        use_index: bool,
+    },
+    /// Build a rebuildable sidecar index for one or more layers.
+    Index {
+        #[command(flatten)]
+        layers: LayerArgs,
+
+        /// Optional directory to write index artifacts into (defaults to next to each layer).
+        #[arg(long)]
+        out_dir: Option<String>,
+
+        /// Store decoded f32 embeddings even when the layer already stores f32 embeddings.
+        #[arg(long)]
+        store_embeddings_f32: bool,
+    },
+    /// Export one or more layers to a stable JSON/NDJSON format.
+    Export {
+        /// Directory to resolve standard layer paths from.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Output format: `json` or `ndjson`.
+        #[arg(long, default_value = "json", value_parser = ["json", "ndjson"])]
+        format: String,
+        /// Comma-separated logical layers: `base,user,delta,local`.
+        #[arg(long, default_value = "base,user,delta,local")]
+        layers: String,
+        /// Optional output file path (defaults to stdout).
+        #[arg(long)]
+        out: Option<String>,
+        /// Redaction mode: `none`, `content`, `embeddings`, or `all`.
+        #[arg(long, default_value = "none", value_parser = ["none", "content", "embeddings", "all"])]
+        redact: String,
+    },
+    /// Import a JSON/NDJSON export and append it to a writable layer.
+    Import {
+        /// Directory to resolve the target layer path from.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Input file path (JSON or NDJSON).
+        #[arg(long = "in")]
+        input: String,
+        /// Target logical layer: `local`, `delta`, `user`, or `base`.
+        #[arg(long, value_parser = ["local", "delta", "user", "base"])]
+        target: String,
+        /// Optional explicit target path (defaults to standard layer file under `--dir`).
+        #[arg(long)]
+        out: Option<String>,
+        /// Dry-run (parse/validate only; no writes).
+        #[arg(long)]
+        dry_run: bool,
+        /// Dedupe by content hash (skips chunks whose `sha256(content)` already exists in target).
+        #[arg(long)]
+        dedupe: bool,
+        /// Preserve input chunk ids when creating a new layer (errors on conflicts when appending).
+        #[arg(long)]
+        preserve_ids: bool,
+        /// Allow writing to `AGENTS.db` (dangerous; bypasses immutability).
+        #[arg(long)]
+        allow_base: bool,
+        /// Embedding dimension when creating a new layer and embeddings are missing.
+        #[arg(long)]
+        dim: Option<u32>,
     },
     /// Compare a base layer to a delta layer by id.
     Diff {
@@ -274,18 +331,8 @@ pub(crate) enum Command {
 pub(crate) enum OptionsCommand {
     /// Print the rolled-up embedding options and where they came from.
     Show {
-        /// Override the base layer path (default: DIR/AGENTS.db).
-        #[arg(long)]
-        base: Option<String>,
-        /// Override the user layer path (default: DIR/AGENTS.user.db).
-        #[arg(long)]
-        user: Option<String>,
-        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Override the local layer path (default: DIR/AGENTS.local.db).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
     },
     /// Append a new options record to a writable standard layer file.
     Set {
@@ -340,18 +387,8 @@ pub(crate) enum OptionsCommand {
 pub(crate) enum AllowlistCommand {
     /// Print the rolled-up allowlist.
     List {
-        /// Override the base layer path (default: DIR/AGENTS.db).
-        #[arg(long)]
-        base: Option<String>,
-        /// Override the user layer path (default: DIR/AGENTS.user.db).
-        #[arg(long)]
-        user: Option<String>,
-        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Override the local layer path (default: DIR/AGENTS.local.db).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
     },
     /// Add or update an allowlist entry.
     Add {
@@ -500,6 +537,27 @@ mod tests {
     }
 
     #[test]
+    fn index_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "index", "--base", "AGENTS.db"])
+            .expect("parse should succeed");
+        match cli.cmd {
+            Command::Index {
+                layers,
+                out_dir,
+                store_embeddings_f32,
+            } => {
+                assert_eq!(layers.base, Some("AGENTS.db".to_string()));
+                assert_eq!(layers.user, None);
+                assert_eq!(layers.delta, None);
+                assert_eq!(layers.local, None);
+                assert_eq!(out_dir, None);
+                assert!(!store_embeddings_f32);
+            }
+            _ => panic!("expected index command"),
+        }
+    }
+
+    #[test]
     fn web_parses_defaults() {
         let cli = Cli::try_parse_from(["agentsdb", "web"]).expect("parse should succeed");
         match cli.cmd {
@@ -519,16 +577,11 @@ mod tests {
             Command::Options { dir, cmd } => {
                 assert_eq!(dir, ".");
                 match cmd {
-                    OptionsCommand::Show {
-                        base,
-                        user,
-                        delta,
-                        local,
-                    } => {
-                        assert_eq!(base, None);
-                        assert_eq!(user, None);
-                        assert_eq!(delta, None);
-                        assert_eq!(local, None);
+                    OptionsCommand::Show { layers } => {
+                        assert_eq!(layers.base, None);
+                        assert_eq!(layers.user, None);
+                        assert_eq!(layers.delta, None);
+                        assert_eq!(layers.local, None);
                     }
                     _ => panic!("expected show subcommand"),
                 }

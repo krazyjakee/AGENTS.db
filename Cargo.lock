@@ -22,6 +22,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -80,6 +81,7 @@ dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
  "agentsdb-format",
+ "memmap2",
  "serde",
  "tempfile",
 ]

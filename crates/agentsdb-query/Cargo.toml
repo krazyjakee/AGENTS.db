@@ -8,6 +8,7 @@ license = "MIT"
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
 agentsdb-format = { path = "../agentsdb-format" }
 agentsdb-embeddings = { path = "../agentsdb-embeddings" }
+memmap2 = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]

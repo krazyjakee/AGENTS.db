@@ -1,8 +1,9 @@
-use crate::cli::{Cli, Command, OptionsCommand, ProposalsCommand};
+use crate::cli::{AllowlistCommand, Cli, Command, LayerArgs, OptionsCommand, ProposalsCommand};
 
 pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
+    let json = cli.json;
     match cli.cmd {
-        Command::List { root } => crate::commands::list::cmd_list(&root, cli.json),
+        Command::List { root } => crate::commands::list::cmd_list(&root, json),
         Command::Init {
             root,
             out,
@@ -17,26 +18,21 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             dim,
             &element_type,
             quant_scale,
-            cli.json,
+            json,
         ),
-        Command::Validate { path } => crate::commands::validate::cmd_validate(&path, cli.json),
+        Command::Validate { path } => crate::commands::validate::cmd_validate(&path, json),
         Command::Inspect { layer, id, path } => {
-            crate::commands::inspect::cmd_inspect(layer.as_deref(), path.as_deref(), id, cli.json)
+            crate::commands::inspect::cmd_inspect(layer.as_deref(), path.as_deref(), id, json)
         }
-        Command::Serve {
-            base,
-            user,
-            delta,
-            local,
-        } => {
-            if cli.json {
+        Command::Serve { layers } => {
+            if json {
                 anyhow::bail!("--json is not supported for serve");
             }
             agentsdb_mcp::serve_stdio(agentsdb_mcp::ServerConfig {
-                base,
-                user,
-                delta,
-                local,
+                base: layers.base,
+                user: layers.user,
+                delta: layers.delta,
+                local: layers.local,
             })
         }
         Command::Compile {
@@ -63,7 +59,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             dim,
             &element_type,
             quant_scale,
-            cli.json,
+            json,
         ),
         Command::Write {
             path,
@@ -87,44 +83,80 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             dim,
             &sources,
             &source_chunks,
-            cli.json,
+            json,
         ),
         Command::Search {
-            base,
-            user,
-            delta,
-            local,
+            layers,
             query,
             query_vec,
             query_vec_file,
             k,
             kinds,
+            use_index,
         } => crate::commands::search::cmd_search(
-            agentsdb_query::LayerSet {
-                base,
-                user,
-                delta,
-                local,
-            },
+            layerset(layers),
             query,
             query_vec,
             query_vec_file,
             k,
             kinds,
-            cli.json,
+            use_index,
+            json,
+        ),
+        Command::Index {
+            layers,
+            out_dir,
+            store_embeddings_f32,
+        } => crate::commands::index::cmd_index(
+            layerset(layers),
+            out_dir.as_deref(),
+            store_embeddings_f32,
+            json,
+        ),
+        Command::Export {
+            dir,
+            format,
+            layers,
+            out,
+            redact,
+        } => crate::commands::export::cmd_export(
+            &dir,
+            &format,
+            &layers,
+            out.as_deref(),
+            &redact,
+            json,
+        ),
+        Command::Import {
+            dir,
+            input,
+            target,
+            out,
+            dry_run,
+            dedupe,
+            preserve_ids,
+            allow_base,
+            dim,
+        } => crate::commands::import::cmd_import(
+            &dir,
+            &input,
+            &target,
+            out.as_deref(),
+            dry_run,
+            dedupe,
+            preserve_ids,
+            allow_base,
+            dim,
+            json,
         ),
         Command::Diff {
             base,
             delta,
             target,
             user,
-        } => crate::commands::diff::cmd_diff(
-            &base,
-            &delta,
-            target.as_deref(),
-            user.as_deref(),
-            cli.json,
-        ),
+        } => {
+            crate::commands::diff::cmd_diff(&base, &delta, target.as_deref(), user.as_deref(), json)
+        }
         Command::Promote {
             from_path,
             to_path,
@@ -137,36 +169,29 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             &ids,
             skip_existing,
             yes,
-            cli.json,
+            json,
         ),
         Command::Compact { base, user, out } => crate::commands::compact::cmd_compact(
             base.as_deref(),
             user.as_deref(),
             out.as_deref(),
-            cli.json,
+            json,
         ),
-        Command::Clean { root, dry_run } => {
-            crate::commands::clean::cmd_clean(&root, dry_run, cli.json)
-        }
+        Command::Clean { root, dry_run } => crate::commands::clean::cmd_clean(&root, dry_run, json),
         Command::Web { root, bind } => {
-            if cli.json {
+            if json {
                 anyhow::bail!("--json is not supported for web");
             }
             crate::commands::web::cmd_web(&root, &bind)
         }
         Command::Options { dir, cmd } => match cmd {
-            OptionsCommand::Show {
-                base,
-                user,
-                delta,
-                local,
-            } => crate::commands::options::cmd_options_show(
+            OptionsCommand::Show { layers } => crate::commands::options::cmd_options_show(
                 &dir,
-                base.as_deref(),
-                user.as_deref(),
-                delta.as_deref(),
-                local.as_deref(),
-                cli.json,
+                layers.base.as_deref(),
+                layers.user.as_deref(),
+                layers.delta.as_deref(),
+                layers.local.as_deref(),
+                json,
             ),
             OptionsCommand::Set {
                 scope,
@@ -193,26 +218,23 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 api_key_env.as_deref(),
                 cache.map(|t| matches!(t, crate::cli::Toggle::On)),
                 cache_dir.as_deref(),
-                cli.json,
+                json,
             ),
             OptionsCommand::Wizard { scope } => {
-                crate::commands::options::cmd_options_wizard(&dir, &scope, cli.json)
+                crate::commands::options::cmd_options_wizard(&dir, &scope, json)
             }
             OptionsCommand::Allowlist { cmd } => match cmd {
-                crate::cli::AllowlistCommand::List {
-                    base,
-                    user,
-                    delta,
-                    local,
-                } => crate::commands::options::cmd_options_allowlist_list(
-                    &dir,
-                    base.as_deref(),
-                    user.as_deref(),
-                    delta.as_deref(),
-                    local.as_deref(),
-                    cli.json,
-                ),
-                crate::cli::AllowlistCommand::Add {
+                AllowlistCommand::List { layers } => {
+                    crate::commands::options::cmd_options_allowlist_list(
+                        &dir,
+                        layers.base.as_deref(),
+                        layers.user.as_deref(),
+                        layers.delta.as_deref(),
+                        layers.local.as_deref(),
+                        json,
+                    )
+                }
+                AllowlistCommand::Add {
                     scope,
                     model,
                     revision,
@@ -223,9 +245,9 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                     &model,
                     revision.as_deref(),
                     &sha256,
-                    cli.json,
+                    json,
                 ),
-                crate::cli::AllowlistCommand::Remove {
+                AllowlistCommand::Remove {
                     scope,
                     model,
                     revision,
@@ -234,10 +256,10 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                     &scope,
                     &model,
                     revision.as_deref(),
-                    cli.json,
+                    json,
                 ),
-                crate::cli::AllowlistCommand::Clear { scope } => {
-                    crate::commands::options::cmd_options_allowlist_clear(&dir, &scope, cli.json)
+                AllowlistCommand::Clear { scope } => {
+                    crate::commands::options::cmd_options_allowlist_clear(&dir, &scope, json)
                 }
             },
         },
@@ -254,7 +276,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 user.as_deref(),
                 proposals.as_deref(),
                 all,
-                cli.json,
+                json,
             ),
             ProposalsCommand::Show { id } => crate::commands::proposals::cmd_proposals_show(
                 &dir,
@@ -262,7 +284,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 user.as_deref(),
                 proposals.as_deref(),
                 id,
-                cli.json,
+                json,
             ),
             ProposalsCommand::Accept {
                 ids,
@@ -276,7 +298,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 &ids,
                 skip_existing,
                 yes,
-                cli.json,
+                json,
             ),
             ProposalsCommand::Reject { ids, reason } => {
                 crate::commands::proposals::cmd_proposals_reject(
@@ -286,9 +308,18 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                     proposals.as_deref(),
                     &ids,
                     reason.as_deref(),
-                    cli.json,
+                    json,
                 )
             }
         },
+    }
+}
+
+fn layerset(layers: LayerArgs) -> agentsdb_query::LayerSet {
+    agentsdb_query::LayerSet {
+        base: layers.base,
+        user: layers.user,
+        delta: layers.delta,
+        local: layers.local,
     }
 }

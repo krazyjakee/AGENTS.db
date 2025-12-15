@@ -9,6 +9,202 @@ async function api(path, opts) {
 
 function setStatus(msg) { $("status").textContent = msg; }
 
+async function refreshVersion() {
+  const el = $("webVersion");
+  if (!el) return;
+  try {
+    const out = await api("/api/version");
+    if (out && out.version) el.textContent = `v${out.version}`;
+  } catch {
+    el.textContent = "v?";
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+}
+
+function escapeAttr(s) {
+  return String(s).replaceAll("&","&amp;").replaceAll("\"","&quot;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+}
+
+function safeHref(raw) {
+  const href = String(raw || "").trim();
+  const lower = href.toLowerCase();
+  if (!href) return "#";
+  if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("mailto:")) return href;
+  if (href.startsWith("#") || href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) return href;
+  return "#";
+}
+
+function renderEmphasis(escaped) {
+  return String(escaped)
+    .replaceAll(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replaceAll(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function renderInline(raw) {
+  const text = String(raw ?? "");
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const tick = text.indexOf("`", i);
+    if (tick === -1) {
+      out += renderInlineNoCode(text.slice(i));
+      break;
+    }
+    const end = text.indexOf("`", tick + 1);
+    if (end === -1) {
+      out += renderInlineNoCode(text.slice(i));
+      break;
+    }
+    out += renderInlineNoCode(text.slice(i, tick));
+    out += `<code>${escapeHtml(text.slice(tick + 1, end))}</code>`;
+    i = end + 1;
+  }
+  return out;
+}
+
+function renderInlineNoCode(raw) {
+  const s = String(raw ?? "");
+  let out = "";
+  let idx = 0;
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  for (;;) {
+    const m = linkRe.exec(s);
+    if (!m) break;
+    out += renderEmphasis(escapeHtml(s.slice(idx, m.index)));
+    const label = renderEmphasis(escapeHtml(m[1]));
+    const href = escapeAttr(safeHref(m[2]));
+    out += `<a href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>`;
+    idx = m.index + m[0].length;
+  }
+  out += renderEmphasis(escapeHtml(s.slice(idx)));
+  return out;
+}
+
+function renderMarkdown(md) {
+  const lines = String(md ?? "").replaceAll("\r\n", "\n").split("\n");
+  const out = [];
+  let paragraph = [];
+  let listType = "";
+  let inCodeFence = false;
+  let codeLang = "";
+  let code = [];
+  let inQuote = false;
+  let quote = [];
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    const text = paragraph.join("\n").trim().replaceAll(/\n+/g, " ");
+    out.push(`<p>${renderInline(text)}</p>`);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!listType) return;
+    out.push(listType === "ol" ? "</ol>" : "</ul>");
+    listType = "";
+  }
+
+  function flushQuote() {
+    if (!inQuote) return;
+    const text = quote.join("\n").trim().replaceAll(/\n+/g, " ");
+    out.push(`<blockquote>${text ? `<p>${renderInline(text)}</p>` : ""}</blockquote>`);
+    inQuote = false;
+    quote = [];
+  }
+
+  function closeBlocks() {
+    flushParagraph();
+    flushList();
+    flushQuote();
+  }
+
+  for (const line of lines) {
+    if (inCodeFence) {
+      if (line.startsWith("```")) {
+        const klass = codeLang ? ` class="language-${escapeAttr(codeLang)}"` : "";
+        out.push(`<pre><code${klass}>${escapeHtml(code.join("\n"))}</code></pre>`);
+        inCodeFence = false;
+        codeLang = "";
+        code = [];
+      } else {
+        code.push(line);
+      }
+      continue;
+    }
+
+    if (line.startsWith("```")) {
+      closeBlocks();
+      inCodeFence = true;
+      codeLang = line.slice(3).trim();
+      code = [];
+      continue;
+    }
+
+    if (/^\s*$/.test(line)) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      continue;
+    }
+
+    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
+    if (quoteMatch) {
+      flushParagraph();
+      flushList();
+      inQuote = true;
+      quote.push(quoteMatch[1]);
+      continue;
+    }
+    flushQuote();
+
+    if (/^\s*((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/.test(line)) {
+      closeBlocks();
+      out.push("<hr>");
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      closeBlocks();
+      const lvl = headingMatch[1].length;
+      out.push(`<h${lvl}>${renderInline(headingMatch[2].trim())}</h${lvl}>`);
+      continue;
+    }
+
+    const ulMatch = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ulMatch) {
+      flushParagraph();
+      flushQuote();
+      if (listType && listType !== "ul") flushList();
+      if (!listType) { listType = "ul"; out.push("<ul>"); }
+      out.push(`<li>${renderInline(ulMatch[1].trim())}</li>`);
+      continue;
+    }
+
+    const olMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (olMatch) {
+      flushParagraph();
+      flushQuote();
+      if (listType && listType !== "ol") flushList();
+      if (!listType) { listType = "ol"; out.push("<ol>"); }
+      out.push(`<li>${renderInline(olMatch[1].trim())}</li>`);
+      continue;
+    }
+
+    paragraph.push(line);
+  }
+
+  if (inCodeFence) {
+    const klass = codeLang ? ` class="language-${escapeAttr(codeLang)}"` : "";
+    out.push(`<pre><code${klass}>${escapeHtml(code.join("\n"))}</code></pre>`);
+  }
+  closeBlocks();
+  return out.join("\n");
+}
+
 async function refreshLayers() {
   const layers = await api("/api/layers");
   const prev = $("layer").value || state.selected;
@@ -44,6 +240,7 @@ async function refreshMeta() {
   if (cur && Object.keys(meta.kinds).includes(cur)) kindSel.value = cur;
   setScopeSelectOptions($("addScope"), path);
   setScopeSelectOptions($("editScope"), path);
+  setImportScopeOptions($("importScope"));
 }
 
 async function loadChunks() {
@@ -94,20 +291,12 @@ async function loadChunks() {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-}
-
-function escapeAttr(s) {
-  return String(s).replaceAll("&","&amp;").replaceAll("\"","&quot;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-}
-
 async function viewChunk(id) {
   const path = $("layer").value;
   const c = await api(`/api/layer/chunk?path=${encodeURIComponent(path)}&id=${id}`);
   $("viewer").style.display = "block";
   $("viewTitle").textContent = `id=${c.id} kind=${c.kind}${c.removed ? " (removed)" : ""}`;
-  $("viewBody").textContent = c.content;
+  $("viewBody").innerHTML = renderMarkdown(c.content);
   showViewActionsForChunk(c);
 }
 
@@ -131,45 +320,54 @@ function showViewActionsForChunk(c) {
 }
 
 async function refreshProposals() {
-  const rows = await api("/api/proposals");
-  const tbody = $("proposalsTable").querySelector("tbody");
-  tbody.innerHTML = "";
-  const pending = rows.filter(r => r.status === "pending").length;
-  $("proposalsStatus").textContent = `${pending} pending (${rows.length} total shown)`;
-  for (const p of rows) {
-    const tr = document.createElement("tr");
-    const title = (p.title || "").trim();
-    const titlePreview = title ? title : "(no title)";
-    const pendingRow = p.status === "pending";
-    const flow = `${p.from_path} → ${p.to_path}`;
-    tr.innerHTML = `
-      <td><input type="checkbox" data-prop="sel" data-id="${p.proposal_id}" ${pendingRow ? "" : "disabled"}></td>
-      <td class="mono">${p.proposal_id}</td>
-      <td class="mono">${p.context_id}</td>
-      <td class="mono">${escapeHtml(flow)}</td>
-      <td><span class="pill">${escapeHtml(p.status)}</span></td>
-      <td class="mono">${escapeHtml(titlePreview)}</td>
-      <td class="actions">
-        <button data-prop="view" data-id="${p.context_id}" data-from="${escapeAttr(p.from_path)}" class="iconOnly" title="View in source layer" aria-label="View proposal chunk">
-          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>
-            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
-          </svg>
-        </button>
-        <button data-prop="accept" data-id="${p.proposal_id}" class="iconOnly secondary" title="Accept (promote)" aria-label="Accept" ${pendingRow ? "" : "disabled"}>
-          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20 6L9 17l-5-5"/>
-          </svg>
-        </button>
-        <button data-prop="reject" data-id="${p.proposal_id}" class="iconOnly secondary" title="Reject" aria-label="Reject" ${pendingRow ? "" : "disabled"}>
-          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M18 6L6 18"/>
-            <path d="M6 6l12 12"/>
-          </svg>
-        </button>
-      </td>
-    `;
-    tbody.appendChild(tr);
+  const panel = $("proposalsPanel");
+  try {
+    const rows = await api("/api/proposals");
+    panel.style.display = rows.length ? "block" : "none";
+    if (!rows.length) return;
+
+    const tbody = $("proposalsTable").querySelector("tbody");
+    tbody.innerHTML = "";
+    const pending = rows.filter(r => r.status === "pending").length;
+    $("proposalsStatus").textContent = `${pending} pending (${rows.length} total shown)`;
+    for (const p of rows) {
+      const tr = document.createElement("tr");
+      const title = (p.title || "").trim();
+      const titlePreview = title ? title : "(no title)";
+      const pendingRow = p.status === "pending";
+      const flow = `${p.from_path} → ${p.to_path}`;
+      tr.innerHTML = `
+        <td><input type="checkbox" data-prop="sel" data-id="${p.proposal_id}" ${pendingRow ? "" : "disabled"}></td>
+        <td class="mono">${p.proposal_id}</td>
+        <td class="mono">${p.context_id}</td>
+        <td class="mono">${escapeHtml(flow)}</td>
+        <td><span class="pill">${escapeHtml(p.status)}</span></td>
+        <td class="mono">${escapeHtml(titlePreview)}</td>
+        <td class="actions">
+          <button data-prop="view" data-id="${p.context_id}" data-from="${escapeAttr(p.from_path)}" class="iconOnly" title="View in source layer" aria-label="View proposal chunk">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>
+              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+            </svg>
+          </button>
+          <button data-prop="accept" data-id="${p.proposal_id}" class="iconOnly secondary" title="Accept (promote)" aria-label="Accept" ${pendingRow ? "" : "disabled"}>
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6L9 17l-5-5"/>
+            </svg>
+          </button>
+          <button data-prop="reject" data-id="${p.proposal_id}" class="iconOnly secondary" title="Reject" aria-label="Reject" ${pendingRow ? "" : "disabled"}>
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6L6 18"/>
+              <path d="M6 6l12 12"/>
+            </svg>
+          </button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    }
+  } catch (err) {
+    panel.style.display = "block";
+    $("proposalsStatus").textContent = `Failed to load proposals: ${err}`;
   }
 }
 
@@ -270,12 +468,76 @@ function setScopeSelectOptions(selectEl, path) {
   }
 }
 
+function setImportScopeOptions(selectEl) {
+  const cur = selectEl.value;
+  selectEl.innerHTML = `
+    <option value="local">local → AGENTS.local.db</option>
+    <option value="delta">delta → AGENTS.delta.db</option>
+    <option value="user">user → AGENTS.user.db</option>
+    <option value="base">base → AGENTS.db (danger)</option>
+  `;
+  if (cur) selectEl.value = cur;
+}
+
+async function downloadExport() {
+  const path = $("layer").value;
+  if (!path) { alert("No layer selected."); return; }
+  const format = $("exportFormat").value || "json";
+  const redact = $("exportRedact").value || "none";
+  const res = await fetch(`/api/export?path=${encodeURIComponent(path)}&format=${encodeURIComponent(format)}&redact=${encodeURIComponent(redact)}`);
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const ext = format === "ndjson" ? "ndjson" : "json";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${path}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function importExportFile() {
+  const file = $("importFile").files?.[0];
+  if (!file) { alert("Choose a file to import."); return; }
+  const scope = $("importScope").value;
+  const path = scope === "base" ? "AGENTS.db" : (scope === "user" ? "AGENTS.user.db" : (scope === "delta" ? "AGENTS.delta.db" : "AGENTS.local.db"));
+  const name = (file.name || "").toLowerCase();
+  const format = name.endsWith(".ndjson") ? "ndjson" : "json";
+  const data = await file.text();
+  let allowBase = false;
+  if (scope === "base") {
+    const typed = prompt("Type AGENTS.db to confirm writing to the base layer:") || "";
+    if (typed !== "AGENTS.db") { alert("Canceled."); return; }
+    allowBase = true;
+  } else {
+    if (!confirm(`Append imported chunks into ${path}?`)) return;
+  }
+  await api("/api/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      path,
+      scope,
+      format,
+      data,
+      dedupe: true,
+      preserve_ids: false,
+      allow_base: allowBase,
+    }),
+  });
+  $("importFile").value = "";
+  await refreshLayers();
+}
+
 $("refresh").onclick = refreshLayers;
 $("layer").onchange = async () => { await refreshMeta(); await loadChunks(); };
 $("load").onclick = loadChunks;
 $("addBtn").onclick = () => { $("addPanel").style.display = $("addPanel").style.display === "none" ? "block" : "none"; };
 $("addCancel").onclick = () => { $("addPanel").style.display = "none"; };
 $("addSubmit").onclick = addChunk;
+$("exportBtn").onclick = () => downloadExport().catch(err => alert(String(err)));
+$("importBtn").onclick = () => importExportFile().catch(err => alert(String(err)));
 $("closeView").onclick = () => { $("viewer").style.display = "none"; };
 $("closeEdit").onclick = () => { $("editor").style.display = "none"; };
 $("kindFilter").onchange = loadChunks;
@@ -322,6 +584,7 @@ $("table").onclick = async (e) => {
 };
 
 refreshLayers().catch(err => setStatus(String(err)));
+refreshVersion();
 
 $("refreshProposals").onclick = refreshProposals;
 $("acceptSelected").onclick = async () => { await acceptProposalIds(selectedProposalIds()); };
