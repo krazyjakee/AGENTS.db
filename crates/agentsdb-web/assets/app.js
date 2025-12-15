@@ -631,7 +631,7 @@ async function editChunkSubmit() {
   const kind = $("editKind").value.trim();
   const confidence = Number($("editConfidence").value);
   const content = $("editContent").value;
-  await api("/api/layer/add", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id, kind, confidence, content }) });
+  await api("/api/layer/add", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id, kind, confidence, content, tombstone_old: true }) });
   $("editor").style.display = "none";
   await refreshMeta();
   await loadChunks();

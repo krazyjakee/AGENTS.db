@@ -283,6 +283,24 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     &input.sources,
                     &input.source_chunks,
                 )?;
+
+                // If tombstone_old is true and we're editing an existing chunk (id is provided),
+                // append a tombstone for the old version
+                if input.tombstone_old && input.id.is_some() {
+                    let tombstone_id = input.id.unwrap();
+                    append_chunk(
+                        &abs_path,
+                        &input.scope,
+                        None, // Auto-assign a new ID for the tombstone
+                        TOMBSTONE_KIND,
+                        &format!("Replaced chunk id {}", tombstone_id),
+                        1.0,
+                        None,
+                        &[],
+                        &[tombstone_id],
+                    ).context("append tombstone for old version")?;
+                }
+
                 st.cache.remove(&input.path);
                 (assigned, input.path)
             };
@@ -639,6 +657,8 @@ struct AddInput {
     sources: Vec<String>,
     #[serde(default)]
     source_chunks: Vec<u32>,
+    #[serde(default)]
+    tombstone_old: bool,
 }
 
 #[derive(Debug, Deserialize)]

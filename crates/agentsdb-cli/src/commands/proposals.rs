@@ -567,6 +567,7 @@ pub(crate) fn cmd_proposals_accept(
             &to_abs.to_string_lossy(),
             &ids,
             skip_existing,
+            true, // tombstone_source
             yes || json,
         )?;
         promoted.extend(out.promoted);

@@ -180,6 +180,19 @@ pub struct LayerFile {
 
 impl LayerFile {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, agentsdb_core::error::Error> {
+        Self::open_with_options(path, false)
+    }
+
+    /// Open a layer file without validating chunk ID uniqueness.
+    /// This is intended for recovery/repair tools like `agentsdb compact`.
+    pub fn open_lenient(path: impl AsRef<Path>) -> Result<Self, agentsdb_core::error::Error> {
+        Self::open_with_options(path, true)
+    }
+
+    fn open_with_options(
+        path: impl AsRef<Path>,
+        allow_duplicate_ids: bool,
+    ) -> Result<Self, agentsdb_core::error::Error> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
         let metadata = file.metadata()?;
@@ -252,6 +265,7 @@ impl LayerFile {
             &string_dictionary,
             &embedding_matrix,
             relationship_count,
+            allow_duplicate_ids,
         )?;
 
         Ok(Self {
@@ -876,6 +890,7 @@ fn validate_chunk_records(
     dict: &StringDictionaryHeaderV1,
     embed: &EmbeddingMatrixHeaderV1,
     relationship_count: Option<u64>,
+    allow_duplicate_ids: bool,
 ) -> Result<(), FormatError> {
     const RECORD_SIZE: u64 = 52;
     let section_start = section.offset;
@@ -905,7 +920,12 @@ fn validate_chunk_records(
         });
     }
 
-    let mut ids = HashSet::with_capacity(chunk_header.chunk_count.min(1024) as usize);
+    let mut ids = if !allow_duplicate_ids {
+        Some(HashSet::with_capacity(chunk_header.chunk_count.min(1024) as usize))
+    } else {
+        None
+    };
+
     for i in 0..chunk_header.chunk_count {
         let off = chunk_header.records_offset + i * RECORD_SIZE;
         let record = parse_chunk_record(bytes, off)?;
@@ -913,8 +933,10 @@ fn validate_chunk_records(
         if record.id == 0 {
             return Err(FormatError::InvalidChunkId(record.id));
         }
-        if !ids.insert(record.id) {
-            return Err(FormatError::DuplicateChunkId(record.id));
+        if let Some(ref mut ids) = ids {
+            if !ids.insert(record.id) {
+                return Err(FormatError::DuplicateChunkId(record.id));
+            }
         }
 
         let kind_id = record.kind_str_id as u64;

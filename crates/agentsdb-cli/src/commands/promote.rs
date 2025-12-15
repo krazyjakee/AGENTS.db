@@ -18,6 +18,7 @@ pub(crate) fn promote_chunks(
     to_path: &str,
     ids: &[u32],
     skip_existing: bool,
+    tombstone_source: bool,
     yes: bool,
 ) -> anyhow::Result<PromoteOutcome> {
     if ids.is_empty() {
@@ -117,6 +118,37 @@ pub(crate) fn promote_chunks(
         .context("write")?;
     }
 
+    // Tombstone promoted chunks in source layer if requested
+    if tombstone_source && !filtered.is_empty() {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let mut tombstones = Vec::new();
+        for id in &filtered {
+            // Read the chunk to get its embedding
+            let chunk = by_id.get(id).ok_or_else(|| {
+                anyhow::anyhow!("chunk id {id} not found in {from_path}")
+            })?;
+
+            let tombstone = agentsdb_format::ChunkInput {
+                id: 0, // Will be auto-assigned
+                kind: "tombstone".to_string(),
+                content: format!("Promoted chunk {} to {}", id, to_path),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: now_ms,
+                embedding: chunk.embedding.clone(),
+                sources: vec![agentsdb_format::ChunkSource::ChunkId(*id)],
+            };
+            tombstones.push(tombstone);
+        }
+
+        agentsdb_format::append_layer_atomic(from_path, &mut tombstones, None)
+            .context("append tombstones to source layer")?;
+    }
+
     Ok(PromoteOutcome {
         promoted: filtered,
         skipped,
@@ -128,6 +160,7 @@ pub(crate) fn cmd_promote(
     to_path: &str,
     ids: &str,
     skip_existing: bool,
+    tombstone_source: bool,
     yes: bool,
     json: bool,
 ) -> anyhow::Result<()> {
@@ -135,7 +168,7 @@ pub(crate) fn cmd_promote(
     if wanted.is_empty() {
         anyhow::bail!("--ids must be non-empty");
     }
-    let out = promote_chunks(from_path, to_path, &wanted, skip_existing, yes || json)?;
+    let out = promote_chunks(from_path, to_path, &wanted, skip_existing, tombstone_source, yes || json)?;
     if json {
         #[derive(Serialize)]
         struct Out<'a> {

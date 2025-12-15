@@ -266,6 +266,9 @@ pub(crate) enum Command {
         /// Skip ids already present in the destination layer instead of erroring.
         #[arg(long)]
         skip_existing: bool,
+        /// Tombstone promoted chunks in the source layer after promotion (default: true).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        tombstone_source: bool,
         /// Assume \"yes\" for interactive confirmation prompts.
         #[arg(long)]
         yes: bool,
