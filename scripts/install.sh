@@ -5,6 +5,8 @@ usage() {
   cat <<'EOF'
 Install the `agentsdb` CLI from GitHub Releases.
 
+Note: Release binaries are built with `--features all-embedders` (local `ort`/`candle` + remote providers).
+
 Usage:
   curl -fsSL https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/scripts/install.sh | bash
 
@@ -288,4 +290,3 @@ if ! command -v agentsdb >/dev/null 2>&1; then
   echo "Note: 'agentsdb' is not on PATH. Add this to your shell profile:" >&2
   echo "  export PATH=\"$bin_dir:\$PATH\"" >&2
 fi
-

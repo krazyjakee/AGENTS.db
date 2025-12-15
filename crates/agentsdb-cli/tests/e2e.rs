@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{io::BufRead, io::Write, process::Stdio};
 
 use serde_json::Value;
 
@@ -70,6 +71,46 @@ fn run_ok_json(cwd: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&out.stdout).expect("stdout is valid JSON")
 }
 
+fn write_layer_with_custom_profile(path: &Path, dim: u32, output_norm: &str) {
+    use agentsdb_embeddings::embedder::{EmbeddingProfile, OutputNorm};
+    use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
+
+    let output_norm = match output_norm {
+        "none" => OutputNorm::None,
+        "l2" => OutputNorm::L2,
+        other => panic!("unknown output_norm {other:?}"),
+    };
+
+    let schema = agentsdb_format::LayerSchema {
+        dim,
+        element_type: agentsdb_format::EmbeddingElementType::F32,
+        quant_scale: 1.0,
+    };
+    let profile = EmbeddingProfile {
+        backend: "hash".to_string(),
+        model: None,
+        revision: None,
+        dim: dim as usize,
+        output_norm,
+    };
+    let metadata = LayerMetadataV1::new(profile)
+        .to_json_bytes()
+        .expect("metadata json");
+    let chunk = agentsdb_format::ChunkInput {
+        id: 1,
+        kind: "note".to_string(),
+        content: "seed".to_string(),
+        author: "human".to_string(),
+        confidence: 1.0,
+        created_at_unix_ms: 0,
+        embedding: vec![0.0; dim as usize],
+        sources: Vec::new(),
+    };
+
+    agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&metadata))
+        .expect("write layer");
+}
+
 #[test]
 fn help_smoke() {
     let dir = TempDir::new("agentsdb_e2e_help");
@@ -88,7 +129,15 @@ fn compile_validate_inspect_roundtrip() {
 
     run_ok(
         dir.path(),
-        &["compile", "--out", &layer_s, "--text", "hello world", "--dim", "8"],
+        &[
+            "compile",
+            "--out",
+            &layer_s,
+            "--text",
+            "hello world",
+            "--dim",
+            "8",
+        ],
     );
 
     let out = run_ok(dir.path(), &["validate", &layer_s]);
@@ -98,6 +147,157 @@ fn compile_validate_inspect_roundtrip() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("ChunkTable: chunk_count="));
     assert!(stdout.contains("EmbeddingMatrix: rows="));
+}
+
+#[test]
+fn compile_is_deterministic_for_hash_backend() {
+    let dir = TempDir::new("agentsdb_e2e_compile_deterministic");
+    let out1 = dir.path().join("AGENTS.1.db");
+    let out2 = dir.path().join("AGENTS.2.db");
+    let out1s = out1.to_string_lossy();
+    let out2s = out2.to_string_lossy();
+
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--out",
+            &out1s,
+            "--text",
+            "hello world",
+            "--dim",
+            "8",
+        ],
+    );
+    run_ok(
+        dir.path(),
+        &[
+            "compile",
+            "--out",
+            &out2s,
+            "--text",
+            "hello world",
+            "--dim",
+            "8",
+        ],
+    );
+
+    let b1 = std::fs::read(&out1).expect("read out1");
+    let b2 = std::fs::read(&out2).expect("read out2");
+    assert_eq!(b1, b2);
+}
+
+#[test]
+fn options_set_show_roundtrip() {
+    let dir = TempDir::new("agentsdb_e2e_options");
+
+    let out = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "options",
+            "set",
+            "--scope",
+            "local",
+            "--backend",
+            "hash",
+            "--dim",
+            "8",
+        ],
+    );
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["action"], "created");
+
+    let out = run_ok_json(dir.path(), &["--json", "options", "show"]);
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["resolved"]["backend"], "hash");
+    assert_eq!(out["resolved"]["dim"], 8);
+    assert_eq!(out["local"]["exists"], true);
+    assert_eq!(out["local"]["patch"]["backend"], "hash");
+    assert_eq!(out["local"]["patch"]["dim"], 8);
+}
+
+#[test]
+fn write_fails_on_embedder_profile_mismatch_vs_layer_metadata() {
+    let dir = TempDir::new("agentsdb_e2e_profile_mismatch_write");
+    let local = dir.path().join("AGENTS.local.db");
+    write_layer_with_custom_profile(&local, 8, "l2");
+
+    let local_s = local.to_string_lossy();
+    let out = run_err(
+        dir.path(),
+        &[
+            "write",
+            &local_s,
+            "--scope",
+            "local",
+            "--kind",
+            "note",
+            "--content",
+            "hello",
+            "--confidence",
+            "1.0",
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("embedder profile mismatch"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn mcp_write_fails_on_embedder_profile_mismatch_vs_layer_metadata() {
+    let dir = TempDir::new("agentsdb_e2e_profile_mismatch_mcp");
+    let local = dir.path().join("AGENTS.local.db");
+    write_layer_with_custom_profile(&local, 8, "l2");
+
+    let mut child = agentsdb()
+        .current_dir(dir.path())
+        .args(["serve", "--local", "AGENTS.local.db"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn agentsdb serve");
+
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "agents_context_write",
+        "params": {
+            "scope": "local",
+            "kind": "note",
+            "content": "hello",
+            "confidence": 1.0
+        }
+    });
+
+    {
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        writeln!(stdin, "{}", req.to_string()).expect("write request");
+        stdin.flush().expect("flush");
+    }
+
+    let mut line = String::new();
+    {
+        let stdout = child.stdout.take().expect("child stdout");
+        let mut r = std::io::BufReader::new(stdout);
+        r.read_line(&mut line).expect("read response line");
+    }
+
+    let _ = child.kill();
+
+    let resp: Value = serde_json::from_str(line.trim()).expect("json resp");
+    let msg = resp
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    assert!(
+        msg.contains("embedder profile mismatch"),
+        "msg={msg} resp={resp}"
+    );
 }
 
 #[test]
@@ -143,10 +343,7 @@ fn write_search_inspect_flow() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("id=42"), "stdout={stdout}");
 
-    let out = run_ok(
-        dir.path(),
-        &["inspect", "--layer", &layer_s, "--id", "42"],
-    );
+    let out = run_ok(dir.path(), &["inspect", "--layer", &layer_s, "--id", "42"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("hello world"), "stdout={stdout}");
     assert!(stdout.contains("source: README.md:1"), "stdout={stdout}");
@@ -200,7 +397,12 @@ fn list_json_includes_only_valid_layers() {
     let arr = v.as_array().expect("list JSON is an array");
     let names: Vec<String> = arr
         .iter()
-        .map(|e| e.get("path").and_then(Value::as_str).unwrap_or_default().to_string())
+        .map(|e| {
+            e.get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        })
         .collect();
     assert_eq!(names, vec!["a.db".to_string(), "b.db".to_string()]);
 }
@@ -293,14 +495,28 @@ fn diff_and_promote_json_flow() {
 
     let c2 = run_ok_json(
         dir.path(),
-        &["--json", "inspect", "--layer", "AGENTS.user.db", "--id", "2"],
+        &[
+            "--json",
+            "inspect",
+            "--layer",
+            "AGENTS.user.db",
+            "--id",
+            "2",
+        ],
     );
     assert_eq!(c2["id"].as_u64(), Some(2));
     assert_eq!(c2["author"].as_str(), Some("human"));
 
     let c3 = run_ok_json(
         dir.path(),
-        &["--json", "inspect", "--layer", "AGENTS.user.db", "--id", "3"],
+        &[
+            "--json",
+            "inspect",
+            "--layer",
+            "AGENTS.user.db",
+            "--id",
+            "3",
+        ],
     );
     assert_eq!(c3["id"].as_u64(), Some(3));
     assert_eq!(c3["author"].as_str(), Some("human"));
@@ -395,16 +611,7 @@ fn clean_json_dry_run_and_delete() {
         .expect("write AGENTS.local.db");
     std::fs::write(dir.path().join("nested").join("AGENTS.db.sig"), b"x").expect("write sig");
 
-    let dry = run_ok_json(
-        dir.path(),
-        &[
-            "--json",
-            "clean",
-            "--root",
-            ".",
-            "--dry-run",
-        ],
-    );
+    let dry = run_ok_json(dir.path(), &["--json", "clean", "--root", ".", "--dry-run"]);
     let paths = dry["paths"].as_array().unwrap();
     assert!(
         paths.iter().any(|p| p.as_str() == Some("AGENTS.db")),

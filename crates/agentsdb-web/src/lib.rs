@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use agentsdb_core::embed::hash_embed;
+use agentsdb_embeddings::config::{
+    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
+};
+use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 use agentsdb_format::{ChunkInput, ChunkSource, LayerFile, SourceRef};
 
 const TOMBSTONE_KIND: &str = "tombstone";
@@ -296,7 +299,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     1.0,
                     None,
                     &Vec::new(),
-                    &vec![input.id],
+                    &[input.id],
                 )?;
                 st.cache.remove(&input.path);
             }
@@ -671,14 +674,12 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
 
 fn truncate_preview(s: &str, max_chars: usize) -> String {
     let mut out = String::new();
-    let mut count = 0usize;
-    for ch in s.chars() {
+    for (count, ch) in s.chars().enumerate() {
         if count >= max_chars {
             out.push('…');
             break;
         }
         out.push(ch);
-        count += 1;
     }
     out
 }
@@ -706,6 +707,7 @@ fn read_chunk_full(path: &Path, removed: &HashSet<u32>, id: u32) -> anyhow::Resu
     anyhow::bail!("chunk id {id} not found");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_chunk(
     path: &Path,
     scope: &str,
@@ -717,74 +719,169 @@ fn append_chunk(
     sources: &[String],
     source_chunks: &[u32],
 ) -> anyhow::Result<u32> {
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    if !matches!(file_name, "AGENTS.local.db" | "AGENTS.delta.db") {
-        anyhow::bail!("writes are only allowed for AGENTS.local.db / AGENTS.delta.db");
-    }
-    if scope == "local" && file_name != "AGENTS.local.db" {
-        anyhow::bail!("scope local only allowed for AGENTS.local.db");
-    }
-    if scope == "delta" && file_name != "AGENTS.delta.db" {
-        anyhow::bail!("scope delta only allowed for AGENTS.delta.db");
-    }
-
-    let exists = path.exists();
-    if exists {
-        let file =
-            LayerFile::open(path).with_context(|| format!("open for append {}", path.display()))?;
-        let dim_usize = file.embedding_dim();
-
-        let mut chunk = ChunkInput {
-            id: id.unwrap_or(0), // 0 = auto-assign
-            kind: kind.to_string(),
-            author: "web".to_string(),
-            confidence,
-            created_at_unix_ms: now_unix_ms(),
-            content: content.to_string(),
-            embedding: Vec::new(),
-            sources: Vec::new(),
-        };
-        chunk.embedding = hash_embed(&chunk.content, dim_usize);
-
-        for s in sources.iter() {
-            chunk.sources.push(ChunkSource::SourceString(s.to_string()));
+    #[allow(clippy::too_many_arguments)]
+    fn inner(
+        path: &Path,
+        scope: &str,
+        id: Option<u32>,
+        kind: &str,
+        content: &str,
+        confidence: f32,
+        dim: Option<u32>,
+        sources: &[String],
+        source_chunks: &[u32],
+    ) -> anyhow::Result<u32> {
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if !matches!(file_name, "AGENTS.local.db" | "AGENTS.delta.db") {
+            anyhow::bail!("writes are only allowed for AGENTS.local.db / AGENTS.delta.db");
         }
-        for cid in source_chunks.iter() {
-            chunk.sources.push(ChunkSource::ChunkId(*cid));
+        if scope == "local" && file_name != "AGENTS.local.db" {
+            anyhow::bail!("scope local only allowed for AGENTS.local.db");
+        }
+        if scope == "delta" && file_name != "AGENTS.delta.db" {
+            anyhow::bail!("scope delta only allowed for AGENTS.delta.db");
         }
 
-        let mut new_chunks = vec![chunk];
-        let assigned =
-            agentsdb_format::append_layer_atomic(path, &mut new_chunks).context("append chunk")?;
-        Ok(*assigned.first().unwrap_or(&0))
-    } else {
-        let dim = dim.context("creating a new layer requires dim")?;
-        let assigned = id.unwrap_or(1);
-        let mut chunk = ChunkInput {
-            id: assigned,
-            kind: kind.to_string(),
-            author: "web".to_string(),
-            confidence,
-            created_at_unix_ms: now_unix_ms(),
-            content: content.to_string(),
-            embedding: Vec::new(),
-            sources: Vec::new(),
+        let exists = path.exists();
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let siblings = standard_layer_paths_for_dir(dir);
+
+        let embedder_for_dim = |dim_usize: usize| -> anyhow::Result<
+            Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>,
+        > {
+            let options = roll_up_embedding_options_from_paths(
+                Some(siblings.local.as_path()),
+                Some(siblings.user.as_path()),
+                Some(siblings.delta.as_path()),
+                Some(siblings.base.as_path()),
+            )
+            .context("roll up options")?;
+            if let Some(cfg_dim) = options.dim {
+                if cfg_dim != dim_usize {
+                    anyhow::bail!(
+                    "embedding dim mismatch (layer is dim={dim_usize}, options specify dim={cfg_dim})"
+                );
+                }
+            }
+            options
+                .into_embedder(dim_usize)
+                .context("resolve embedder from options")
         };
-        chunk.embedding = hash_embed(&chunk.content, dim as usize);
-        if chunk.id == 0 {
-            chunk.id = 1;
+        if exists {
+            let file = LayerFile::open(path)
+                .with_context(|| format!("open for append {}", path.display()))?;
+            let dim_usize = file.embedding_dim();
+
+            let mut chunk = ChunkInput {
+                id: id.unwrap_or(0), // 0 = auto-assign
+                kind: kind.to_string(),
+                author: "web".to_string(),
+                confidence,
+                created_at_unix_ms: now_unix_ms(),
+                content: content.to_string(),
+                embedding: Vec::new(),
+                sources: Vec::new(),
+            };
+            let embedder = embedder_for_dim(dim_usize)?;
+            chunk.embedding = embedder
+                .embed(&[chunk.content.clone()])?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| vec![0.0; dim_usize]);
+            let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
+                .with_embedder_metadata(embedder.metadata())
+                .with_tool("agentsdb-web", env!("CARGO_PKG_VERSION"));
+            let layer_metadata_json = layer_metadata
+                .to_json_bytes()
+                .context("serialize layer metadata")?;
+
+            for s in sources.iter() {
+                chunk.sources.push(ChunkSource::SourceString(s.to_string()));
+            }
+            for cid in source_chunks.iter() {
+                chunk.sources.push(ChunkSource::ChunkId(*cid));
+            }
+
+            let mut new_chunks = vec![chunk];
+            let assigned = if let Some(existing) = file.layer_metadata_bytes() {
+                let existing = LayerMetadataV1::from_json_bytes(existing)
+                    .context("parse existing layer metadata")?;
+                if existing.embedding_profile != *embedder.profile() {
+                    anyhow::bail!(
+                        "embedder profile mismatch vs existing layer metadata (existing={:?}, current={:?})",
+                        existing.embedding_profile,
+                        embedder.profile()
+                    );
+                }
+                agentsdb_format::append_layer_atomic(path, &mut new_chunks, None)
+                    .context("append chunk")?
+            } else {
+                agentsdb_format::append_layer_atomic(
+                    path,
+                    &mut new_chunks,
+                    Some(&layer_metadata_json),
+                )
+                .context("append chunk")?
+            };
+            Ok(*assigned.first().unwrap_or(&0))
+        } else {
+            let dim = dim.context("creating a new layer requires dim")?;
+            let assigned = id.unwrap_or(1);
+            let mut chunk = ChunkInput {
+                id: assigned,
+                kind: kind.to_string(),
+                author: "web".to_string(),
+                confidence,
+                created_at_unix_ms: now_unix_ms(),
+                content: content.to_string(),
+                embedding: Vec::new(),
+                sources: Vec::new(),
+            };
+            let dim_usize = dim as usize;
+            let embedder = embedder_for_dim(dim_usize)?;
+            chunk.embedding = embedder
+                .embed(&[chunk.content.clone()])?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| vec![0.0; dim_usize]);
+            let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
+                .with_embedder_metadata(embedder.metadata())
+                .with_tool("agentsdb-web", env!("CARGO_PKG_VERSION"));
+            let layer_metadata_json = layer_metadata
+                .to_json_bytes()
+                .context("serialize layer metadata")?;
+            if chunk.id == 0 {
+                chunk.id = 1;
+            }
+            let schema = agentsdb_format::LayerSchema {
+                dim,
+                element_type: agentsdb_format::EmbeddingElementType::F32,
+                quant_scale: 1.0,
+            };
+            agentsdb_format::write_layer_atomic(
+                path,
+                &schema,
+                &[chunk],
+                Some(&layer_metadata_json),
+            )
+            .context("create layer")?;
+            Ok(assigned)
         }
-        let schema = agentsdb_format::LayerSchema {
-            dim: dim as u32,
-            element_type: agentsdb_format::EmbeddingElementType::F32,
-            quant_scale: 1.0,
-        };
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk]).context("create layer")?;
-        Ok(assigned)
     }
+    inner(
+        path,
+        scope,
+        id,
+        kind,
+        content,
+        confidence,
+        dim,
+        sources,
+        source_chunks,
+    )
 }
 
 fn now_unix_ms() -> u64 {
@@ -792,4 +889,55 @@ fn now_unix_ms() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentsdb_embeddings::embedder::{EmbeddingProfile, OutputNorm};
+    use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
+
+    fn write_layer_with_custom_profile(path: &Path, dim: u32, output_norm: OutputNorm) {
+        let schema = agentsdb_format::LayerSchema {
+            dim,
+            element_type: agentsdb_format::EmbeddingElementType::F32,
+            quant_scale: 1.0,
+        };
+        let profile = EmbeddingProfile {
+            backend: "hash".to_string(),
+            model: None,
+            revision: None,
+            dim: dim as usize,
+            output_norm,
+        };
+        let metadata = LayerMetadataV1::new(profile)
+            .to_json_bytes()
+            .expect("metadata json");
+        let chunk = agentsdb_format::ChunkInput {
+            id: 1,
+            kind: "note".to_string(),
+            content: "seed".to_string(),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: vec![0.0; dim as usize],
+            sources: Vec::new(),
+        };
+        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&metadata))
+            .expect("write layer");
+    }
+
+    #[test]
+    fn web_write_rejects_embedder_profile_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.local.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::L2);
+
+        let err = append_chunk(&path, "local", None, "note", "hello", 1.0, None, &[], &[])
+            .expect_err("expected mismatch error");
+        assert!(
+            err.to_string().contains("embedder profile mismatch"),
+            "{err}"
+        );
+    }
 }

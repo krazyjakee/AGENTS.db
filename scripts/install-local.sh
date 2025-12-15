@@ -6,20 +6,21 @@ usage() {
 Install the `agentsdb` CLI locally.
 
 Usage:
-  bash scripts/install-cli.sh [options]
+  bash scripts/install-local.sh [options]
 
 Options:
   --cargo-install        Use `cargo install --path ...` (default).
   --prefix PATH          Build + copy into PATH (installs to PATH/bin by default).
   --bin-dir PATH         Install directory for the binary (overrides --prefix/bin).
+  --features FEATURES    Cargo features to enable (default: all-embedders).
   --debug                Build debug binary (default: release).
   --force                Overwrite existing binary, if present.
   -h, --help             Show this help.
 
 Examples:
-  bash scripts/install-cli.sh
-  bash scripts/install-cli.sh --prefix "$HOME/.local"
-  bash scripts/install-cli.sh --bin-dir /usr/local/bin --force
+  bash scripts/install-local.sh
+  bash scripts/install-local.sh --prefix "$HOME/.local"
+  bash scripts/install-local.sh --bin-dir /usr/local/bin --force
 EOF
 }
 
@@ -28,6 +29,7 @@ prefix=""
 bin_dir=""
 profile="release"
 force=0
+features="all-embedders"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +45,10 @@ while [[ $# -gt 0 ]]; do
     --bin-dir)
       want_cargo_install=0
       bin_dir="${2:-}"
+      shift 2
+      ;;
+    --features)
+      features="${2:-}"
       shift 2
       ;;
     --debug)
@@ -96,6 +102,9 @@ fi
 
 if [[ "$want_cargo_install" -eq 1 ]]; then
   args=(install --path "$crate_path" --locked)
+  if [[ -n "$features" ]]; then
+    args+=(--features "$features")
+  fi
   if [[ "$force" -eq 1 ]]; then
     args+=(--force)
   fi
@@ -119,8 +128,13 @@ if [[ "$profile" == "debug" ]]; then
   target_dir="$repo_root/target/debug"
 fi
 
-echo "+ cargo build -p agentsdb-cli ${target_flag} --locked"
-cargo build -p agentsdb-cli ${target_flag} --locked
+features_flag=""
+if [[ -n "$features" ]]; then
+  features_flag=(--features "$features")
+fi
+
+echo "+ cargo build -p agentsdb-cli ${target_flag} --locked ${features_flag[*]}"
+cargo build -p agentsdb-cli ${target_flag} --locked "${features_flag[@]}"
 
 uname_s="$(uname -s 2>/dev/null || true)"
 exe_suffix=""

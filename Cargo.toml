@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/agentsdb-core",
+  "crates/agentsdb-embeddings",
   "crates/agentsdb-format",
   "crates/agentsdb-query",
   "crates/agentsdb-mcp",

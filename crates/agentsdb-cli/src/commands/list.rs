@@ -114,7 +114,6 @@ fn print_table(layers: &[ListedLayer]) {
 mod tests {
     use super::*;
     use agentsdb_format::{ChunkInput, EmbeddingElementType};
-    use std::path::PathBuf;
 
     fn write_layer(path: &Path, chunk_count: u32) {
         let schema = agentsdb_format::LayerSchema {
@@ -134,7 +133,7 @@ mod tests {
                 sources: Vec::new(),
             })
             .collect();
-        agentsdb_format::write_layer_atomic(path, &schema, &chunks).expect("write layer");
+        agentsdb_format::write_layer_atomic(path, &schema, &chunks, None).expect("write layer");
     }
 
     #[test]

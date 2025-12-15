@@ -124,9 +124,9 @@ Goals:
 Work items:
 - Implement “collect” step: discover input sources (start with `AGENTS.md` and a configurable include list).
 - Implement chunking: deterministic chunk boundaries and stable `id` assignment.
-- Compute embeddings (v0.1 options):
-  - Option A: pluggable embedder interface with a local embedding backend.
-  - Option B: “import embeddings” mode for offline/CI embedding generation.
+- Compute embeddings:
+  - Implemented: pluggable embedder interface + deterministic `hash` default, with feature-gated local/remote backends (`crates/agentsdb-embeddings/`).
+  - Implemented: options roll-up from `options` records in standard layers (`local > user > delta > base`) and layer-level embedding metadata (see `docs/RFC.md`).
 - Produce a complete base layer file following the RFC binary structs.
 
 Acceptance criteria:

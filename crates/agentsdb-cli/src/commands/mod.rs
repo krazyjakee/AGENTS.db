@@ -5,6 +5,7 @@ pub(crate) mod diff;
 pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod list;
+pub(crate) mod options;
 pub(crate) mod promote;
 pub(crate) mod search;
 pub(crate) mod validate;

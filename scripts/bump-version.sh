@@ -87,6 +87,6 @@ git diff --name-only crates/*/Cargo.toml "$CLI_FILE" 2>/dev/null || echo "  (git
 echo ""
 echo "Next steps:"
 echo "  1. Review changes: git diff"
-echo "  2. Test build: cargo build"
+echo "  2. Test build: cargo build -p agentsdb-cli --features all-embedders"
 echo "  3. Commit: git commit -am \"Bump version to ${NEW_VERSION}\""
 echo "  4. Tag: git tag v${NEW_VERSION}"

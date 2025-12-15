@@ -91,7 +91,7 @@ agentsdb compile --out AGENTS.db --text "Project note: layers are append-only."
 ```
 
 Notes:
-- If embeddings aren’t provided, `compile` uses a deterministic built-in hash embedder (handy for local/dev).
+- If embeddings aren’t provided, `compile` uses the configured embedder from rolled-up options (default: deterministic built-in hash embedder).
 - `compile` appends to an existing `--out` file by default; use `--replace` to overwrite.
 
 ### 3) Validate and inspect a layer file
@@ -142,9 +142,99 @@ Then search including local results:
 agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 5
 ```
 
+## Options (config records)
+
+Embedding behavior is configured via append-only **options records** stored in layer files and rolled up with precedence:
+
+`AGENTS.local.db > AGENTS.user.db > AGENTS.delta.db > AGENTS.db`
+
+- Options are stored as chunks with `kind=options` and JSON `content`.
+- Options records are excluded from search results by default (unless you pass `--kind options`).
+
+Current options schema (partial; more keys may be added later):
+
+```json
+{
+  "embedding": {
+    "backend": "hash",
+    "dim": 128,
+    "model": null,
+    "revision": null,
+    "cache_enabled": false,
+    "cache_dir": null
+  }
+}
+```
+
+Show the effective rolled-up options (and which layer provided the last patch):
+
+```sh
+agentsdb options show
+```
+
+Interactive setup (recommended):
+
+```sh
+agentsdb options wizard
+```
+
+Set a local override (writes to `AGENTS.local.db`):
+
+```sh
+agentsdb options set --scope local --backend hash --dim 128
+```
+
+Set a shareable default (writes to `AGENTS.user.db`):
+
+```sh
+agentsdb options set --scope user --backend hash --dim 128
+```
+
+Advanced: write the options record manually (equivalent to `agentsdb options set`):
+
+```sh
+agentsdb write AGENTS.local.db \
+  --scope local \
+  --kind options \
+  --content '{"embedding":{"backend":"hash","dim":128}}' \
+  --confidence 1.0 \
+  --dim 128
+```
+
+### Embedding backends
+
+By default, `agentsdb` uses the deterministic offline `hash` embedder. Additional backends are feature-gated and require rebuilding:
+
+```sh
+cargo build -p agentsdb-cli --features all-embedders
+```
+
+Backends supported when enabled: `ort`, `candle`, `openai`, `voyage`, `cohere`.
+
+Remote providers read the API key from an env var (defaults: `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `COHERE_API_KEY`), configurable via `agentsdb options set --api-key-env ...`.
+
+Local model downloads can be pinned/verified:
+
+```sh
+agentsdb options allowlist list
+agentsdb options allowlist add --scope local --model all-minilm-l6-v2 --revision main --sha256 <sha256>
+```
+
+## Editing and tombstones
+
+Layers are append-only, but records are still “editable”:
+
+- **Edit**: append a new chunk with the **same id**; the newest chunk with that id in the layer is the effective version.
+- **Remove**: append a tombstone chunk (`kind=tombstone`) that references the removed chunk id via `--source-chunk ID`.
+
+Tombstones and options records are excluded from search results by default (unless filtered by `--kind tombstone` / `--kind options`).
+
 ## Web UI
 
-`agentsdb web` launches a local Web UI for browsing layers under a root directory and appending/removing chunks in writable layers (`AGENTS.local.db` / `AGENTS.delta.db`).
+`agentsdb web` launches a local Web UI for browsing layers under a root directory and appending/removing/editing chunks in writable layers (`AGENTS.local.db` / `AGENTS.delta.db`).
+
+- “Edit” appends a new version with the same id (and can optionally tombstone the old record).
+- “Remove” is a soft-delete (tombstone append).
 
 ```sh
 agentsdb web --root . --bind 127.0.0.1:3030
@@ -204,6 +294,7 @@ gemini mcp add --transport stdio --scope project agentsdb agentsdb serve --base 
 ## Repository layout
 
 - `crates/agentsdb-core/`: shared types, errors, embedding utilities.
+- `crates/agentsdb-embeddings/`: embedder backends + deterministic cache + options roll-up (`hash` by default; feature-gated `ort`/`candle`/`openai`/`voyage`/`cohere`).
 - `crates/agentsdb-format/`: `AGENTS.db` file reader/writer.
 - `crates/agentsdb-query/`: query engine across one or more layers.
 - `crates/agentsdb-mcp/`: MCP server library.
@@ -225,6 +316,7 @@ cargo clippy --all-targets --all-features
 
 - Spec and semantics: `docs/RFC.md`
 - Planned scope: `docs/Reference Implementation.md`
+- Embeddings: `embedding.md`
 - Looking for a workflow/mental model of how to lean into this approach? See `WORKFLOW.md`
 
 ## License

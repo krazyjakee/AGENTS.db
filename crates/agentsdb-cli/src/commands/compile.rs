@@ -1,8 +1,12 @@
-use agentsdb_core::embed::hash_embed;
 use anyhow::Context;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use agentsdb_embeddings::config::{
+    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
+};
+use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
 use crate::util::{assign_stable_id, collect_files};
@@ -75,6 +79,7 @@ pub(crate) fn cmd_compile(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_input_from_sources(
     root: &str,
     includes: &[String],
@@ -194,6 +199,45 @@ pub(crate) fn compile_to_layer(
 
     input.chunks.sort_by_key(|c| c.id);
     let dim = schema.dim as usize;
+
+    let out_path = Path::new(out);
+    let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
+    let siblings = standard_layer_paths_for_dir(out_dir);
+    let options = roll_up_embedding_options_from_paths(
+        Some(siblings.local.as_path()),
+        Some(siblings.user.as_path()),
+        Some(siblings.delta.as_path()),
+        Some(siblings.base.as_path()),
+    )
+    .context("roll up options")?;
+    if let Some(cfg_dim) = options.dim {
+        if cfg_dim != dim {
+            anyhow::bail!(
+                "embedding dim mismatch (schema is dim={dim}, options specify dim={cfg_dim})"
+            );
+        }
+    }
+    let embedder = options
+        .into_embedder(dim)
+        .context("resolve embedder from options")?;
+
+    let to_embed: Vec<String> = input
+        .chunks
+        .iter()
+        .filter(|c| c.embedding.is_none())
+        .map(|c| c.content.clone())
+        .collect();
+    let mut embedded_iter = embedder
+        .embed(&to_embed)
+        .context("embed chunks")?
+        .into_iter();
+
+    let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
+        .with_embedder_metadata(embedder.metadata())
+        .with_tool("agentsdb-cli", env!("CARGO_PKG_VERSION"));
+    let layer_metadata_json = layer_metadata
+        .to_json_bytes()
+        .context("serialize layer metadata")?;
     let mut chunks: Vec<agentsdb_format::ChunkInput> = input
         .chunks
         .drain(..)
@@ -201,7 +245,7 @@ pub(crate) fn compile_to_layer(
             let content = c.content;
             let embedding = match c.embedding {
                 Some(v) => v,
-                None => hash_embed(&content, dim),
+                None => embedded_iter.next().unwrap_or_else(|| vec![0.0; dim]),
             };
             agentsdb_format::ChunkInput {
                 id: c.id,
@@ -225,7 +269,6 @@ pub(crate) fn compile_to_layer(
         })
         .collect();
 
-    let out_path = Path::new(out);
     let existed = out_path.exists();
     let action = if !replace && existed {
         let file = agentsdb_format::LayerFile::open(out_path)
@@ -246,10 +289,26 @@ pub(crate) fn compile_to_layer(
             );
         }
 
-        agentsdb_format::append_layer_atomic(out_path, &mut chunks).context("append layer")?;
+        if let Some(existing) = file.layer_metadata_bytes() {
+            let existing = LayerMetadataV1::from_json_bytes(existing)
+                .context("parse existing layer metadata")?;
+            if existing.embedding_profile != *embedder.profile() {
+                anyhow::bail!(
+                    "embedder profile mismatch vs existing layer metadata (existing={:?}, current={:?})",
+                    existing.embedding_profile,
+                    embedder.profile()
+                );
+            }
+            agentsdb_format::append_layer_atomic(out_path, &mut chunks, None)
+                .context("append layer")?;
+        } else {
+            agentsdb_format::append_layer_atomic(out_path, &mut chunks, Some(&layer_metadata_json))
+                .context("append layer")?;
+        }
         LayerWriteAction::Appended
     } else {
-        agentsdb_format::write_layer_atomic(out_path, &schema, &chunks).context("write layer")?;
+        agentsdb_format::write_layer_atomic(out_path, &schema, &chunks, Some(&layer_metadata_json))
+            .context("write layer")?;
         if existed && replace {
             LayerWriteAction::Replaced
         } else {

@@ -69,10 +69,7 @@
         </div>
         <div id="addPanel" style="display:none; margin-top:10px">
           <label>Scope (writes only)</label>
-          <select id="addScope">
-            <option value="local">local (AGENTS.local.db)</option>
-            <option value="delta">delta (AGENTS.delta.db)</option>
-          </select>
+          <select id="addScope"></select>
           <label>Kind</label>
           <input id="addKind" value="note">
           <label>Confidence</label>
@@ -140,8 +137,49 @@
           </div>
           <pre id="viewBody" class="mono" style="white-space:pre-wrap; margin:10px 0 0"></pre>
         </div>
+
+        <div id="editor" style="margin-top:10px; display:none">
+          <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+          <div class="row">
+            <div id="editTitle" class="mono"></div>
+            <button id="closeEdit" class="iconOnly secondary" title="Close (Esc)" aria-label="Close editor">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6L6 18"/>
+                <path d="M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <label>Scope (writes only)</label>
+          <select id="editScope"></select>
+          <label>Kind</label>
+          <input id="editKind">
+          <label>Confidence</label>
+          <input id="editConfidence" type="number" min="0" max="1" step="0.01">
+          <label>Content</label>
+          <textarea id="editContent" rows="8" class="mono"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button id="editSubmit" class="icon" title="Append updated chunk (Ctrl/⌘ + Enter)" aria-label="Save edit">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Save (append)
+            </button>
+            <button id="editTombstone" class="icon secondary" title="Tombstone the previous record (optional)" aria-label="Tombstone previous">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18"/>
+                <path d="M8 6V4h8v2"/>
+                <path d="M19 6l-1 14H6L5 6"/>
+                <path d="M10 11v6"/>
+                <path d="M14 11v6"/>
+              </svg>
+              Tombstone old
+            </button>
+          </div>
+          <div class="muted" style="margin-top:6px">
+            Edits are append-only: saving creates a new record with the same id. You can optionally tombstone the previous record.
+          </div>
+        </div>
       </section>
     </main>
   </body>
 </html>
-

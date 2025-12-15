@@ -41,6 +41,8 @@ async function refreshMeta() {
   const cur = kindSel.value;
   kindSel.innerHTML = `<option value="">(all)</option>` + Object.keys(meta.kinds).map(k => `<option value="${escapeAttr(k)}">${escapeHtml(k)}</option>`).join("");
   if (cur && Object.keys(meta.kinds).includes(cur)) kindSel.value = cur;
+  setScopeSelectOptions($("addScope"), path);
+  setScopeSelectOptions($("editScope"), path);
 }
 
 async function loadChunks() {
@@ -68,6 +70,12 @@ async function loadChunks() {
           <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/>
             <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+          </svg>
+        </button>
+        <button data-act="edit" data-id="${c.id}" class="iconOnly secondary" title="Edit (append new version)" aria-label="Edit" ${scope ? "" : "disabled"}>
+          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
           </svg>
         </button>
         <button data-act="remove" data-id="${c.id}" class="iconOnly secondary" title="Remove (soft delete)" aria-label="Remove" ${scope ? "" : "disabled"}>
@@ -113,7 +121,7 @@ async function removeChunk(id) {
 
 async function addChunk() {
   const path = $("layer").value;
-  const scope = writeScopeForPath(path);
+  const scope = $("addScope").value || writeScopeForPath(path);
   if (!scope) { alert("Add is only supported for AGENTS.local.db / AGENTS.delta.db"); return; }
   const kind = $("addKind").value.trim();
   const confidence = Number($("addConfidence").value);
@@ -131,6 +139,17 @@ function writeScopeForPath(path) {
   return "";
 }
 
+function setScopeSelectOptions(selectEl, path) {
+  const scope = writeScopeForPath(path);
+  selectEl.innerHTML = "";
+  if (!scope) return;
+  if (scope === "local") {
+    selectEl.innerHTML = `<option value="local">local (AGENTS.local.db)</option>`;
+  } else if (scope === "delta") {
+    selectEl.innerHTML = `<option value="delta">delta (AGENTS.delta.db)</option>`;
+  }
+}
+
 $("refresh").onclick = refreshLayers;
 $("layer").onchange = async () => { await refreshMeta(); await loadChunks(); };
 $("load").onclick = loadChunks;
@@ -138,6 +157,7 @@ $("addBtn").onclick = () => { $("addPanel").style.display = $("addPanel").style.
 $("addCancel").onclick = () => { $("addPanel").style.display = "none"; };
 $("addSubmit").onclick = addChunk;
 $("closeView").onclick = () => { $("viewer").style.display = "none"; };
+$("closeEdit").onclick = () => { $("editor").style.display = "none"; };
 $("kindFilter").onchange = loadChunks;
 $("includeRemoved").onchange = loadChunks;
 $("offset").onchange = loadChunks;
@@ -158,10 +178,17 @@ $("addContent").addEventListener("keydown", async (e) => {
     await addChunk();
   }
 });
+$("editContent").addEventListener("keydown", async (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    await editChunkSubmit();
+  }
+});
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   $("viewer").style.display = "none";
   $("addPanel").style.display = "none";
+  $("editor").style.display = "none";
 });
 $("table").onclick = async (e) => {
   const btn = e.target.closest("button");
@@ -170,7 +197,49 @@ $("table").onclick = async (e) => {
   const id = btn.getAttribute("data-id");
   if (act === "view") await viewChunk(id);
   if (act === "remove") await removeChunk(id);
+  if (act === "edit") await openEditor(id);
 };
 
 refreshLayers().catch(err => setStatus(String(err)));
 
+async function openEditor(id) {
+  const path = $("layer").value;
+  const scope = writeScopeForPath(path);
+  if (!scope) { alert("Edit is only supported for AGENTS.local.db / AGENTS.delta.db"); return; }
+  const c = await api(`/api/layer/chunk?path=${encodeURIComponent(path)}&id=${id}`);
+  $("viewer").style.display = "none";
+  $("editor").style.display = "block";
+  $("editTitle").textContent = `edit id=${c.id} kind=${c.kind}${c.removed ? " (removed)" : ""}`;
+  $("editor").dataset.id = String(c.id);
+  setScopeSelectOptions($("editScope"), path);
+  $("editKind").value = c.kind;
+  $("editConfidence").value = String(c.confidence.toFixed(2));
+  $("editContent").value = c.content;
+}
+
+async function editChunkSubmit() {
+  const path = $("layer").value;
+  const scope = $("editScope").value;
+  const id = Number($("editor").dataset.id || "0");
+  const kind = $("editKind").value.trim();
+  const confidence = Number($("editConfidence").value);
+  const content = $("editContent").value;
+  await api("/api/layer/add", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id, kind, confidence, content }) });
+  $("editor").style.display = "none";
+  await refreshMeta();
+  await loadChunks();
+}
+
+async function editChunkTombstone() {
+  const path = $("layer").value;
+  const scope = $("editScope").value;
+  const id = Number($("editor").dataset.id || "0");
+  if (!confirm("Append tombstone for the old record id?")) return;
+  await api("/api/layer/remove", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id }) });
+  $("editor").style.display = "none";
+  await refreshMeta();
+  await loadChunks();
+}
+
+$("editSubmit").onclick = editChunkSubmit;
+$("editTombstone").onclick = editChunkTombstone;

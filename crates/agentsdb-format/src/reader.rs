@@ -12,6 +12,7 @@ pub enum SectionKind {
     ChunkTable,
     EmbeddingMatrix,
     Relationships,
+    LayerMetadata,
     Unknown(u32),
 }
 
@@ -22,6 +23,7 @@ impl SectionKind {
             2 => Self::ChunkTable,
             3 => Self::EmbeddingMatrix,
             4 => Self::Relationships,
+            5 => Self::LayerMetadata,
             other => Self::Unknown(other),
         }
     }
@@ -32,6 +34,7 @@ impl SectionKind {
             Self::ChunkTable => "SECTION_CHUNK_TABLE",
             Self::EmbeddingMatrix => "SECTION_EMBEDDING_MATRIX",
             Self::Relationships => "SECTION_RELATIONSHIPS",
+            Self::LayerMetadata => "SECTION_LAYER_METADATA",
             Self::Unknown(_) => "SECTION_UNKNOWN",
         }
     }
@@ -152,6 +155,14 @@ struct RelationshipsHeaderV1 {
     records_offset: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LayerMetadataHeaderV1 {
+    version: u32,
+    format: u32,
+    blob_offset: u64,
+    blob_length: u64,
+}
+
 #[derive(Debug)]
 pub struct LayerFile {
     path: PathBuf,
@@ -164,6 +175,7 @@ pub struct LayerFile {
     pub embedding_matrix: EmbeddingMatrixHeaderV1,
     pub relationship_count: Option<u64>,
     relationships_records_offset: Option<u64>,
+    layer_metadata: Option<LayerMetadataHeaderV1>,
 }
 
 impl LayerFile {
@@ -202,6 +214,7 @@ impl LayerFile {
         let chunk_section = required_section(&sections, SectionKind::ChunkTable)?;
         let embed_section = required_section(&sections, SectionKind::EmbeddingMatrix)?;
         let rel_section = optional_section(&sections, SectionKind::Relationships)?;
+        let metadata_section = optional_section(&sections, SectionKind::LayerMetadata)?;
 
         let string_dictionary = parse_string_dictionary_header(bytes, string_section)?;
         validate_string_dictionary(bytes, string_section, &string_dictionary)?;
@@ -224,6 +237,14 @@ impl LayerFile {
                 (None, None)
             };
 
+        let layer_metadata = if let Some(section) = metadata_section {
+            let hdr = parse_layer_metadata_header(bytes, section)?;
+            validate_layer_metadata(bytes, section, &hdr)?;
+            Some(hdr)
+        } else {
+            None
+        };
+
         validate_chunk_records(
             bytes,
             chunk_section,
@@ -244,6 +265,7 @@ impl LayerFile {
             embedding_matrix,
             relationship_count,
             relationships_records_offset,
+            layer_metadata,
         })
     }
 
@@ -257,6 +279,26 @@ impl LayerFile {
 
     pub fn embedding_dim(&self) -> usize {
         self.embedding_matrix.dim as usize
+    }
+
+    pub fn layer_metadata_bytes(&self) -> Option<&[u8]> {
+        let hdr = self.layer_metadata?;
+        let bytes = self.file_bytes();
+        let start = hdr.blob_offset as usize;
+        let end = start.saturating_add(hdr.blob_length as usize);
+        bytes.get(start..end)
+    }
+
+    pub fn layer_metadata_json(&self) -> Result<Option<&str>, agentsdb_core::error::Error> {
+        let Some(bytes) = self.layer_metadata_bytes() else {
+            return Ok(None);
+        };
+        Ok(Some(std::str::from_utf8(bytes).map_err(|_| {
+            FormatError::InvalidValue {
+                field: "LayerMetadataHeaderV1.blob",
+                reason: "metadata blob is not valid UTF-8",
+            }
+        })?))
     }
 
     pub fn chunks(&self) -> ChunkIter<'_> {
@@ -504,7 +546,7 @@ fn parse_section_table(
     }
 
     let mut sections = Vec::with_capacity(count_usize);
-    let mut required_seen = (false, false, false, false); // string, chunk, embed, rel
+    let mut required_seen = (false, false, false, false, false); // string, chunk, embed, rel, metadata
     for i in 0..count {
         let off = table_offset + i * ENTRY_SIZE;
         let kind_u32 = read_u32(bytes, off)?;
@@ -552,6 +594,12 @@ fn parse_section_table(
                 }
                 required_seen.3 = true;
             }
+            SectionKind::LayerMetadata => {
+                if required_seen.4 {
+                    return Err(FormatError::DuplicateSection("layer_metadata"));
+                }
+                required_seen.4 = true;
+            }
             SectionKind::Unknown(_) => {}
         }
 
@@ -588,6 +636,7 @@ fn required_section(
             SectionKind::ChunkTable => FormatError::MissingSection("chunk_table"),
             SectionKind::EmbeddingMatrix => FormatError::MissingSection("embedding_matrix"),
             SectionKind::Relationships => FormatError::MissingSection("relationships"),
+            SectionKind::LayerMetadata => FormatError::MissingSection("layer_metadata"),
             SectionKind::Unknown(_) => FormatError::MissingSection("unknown"),
         })
 }
@@ -597,6 +646,75 @@ fn optional_section(
     kind: SectionKind,
 ) -> Result<Option<SectionEntry>, FormatError> {
     Ok(sections.iter().find(|s| s.kind == kind).copied())
+}
+
+fn parse_layer_metadata_header(
+    bytes: &[u8],
+    section: SectionEntry,
+) -> Result<LayerMetadataHeaderV1, FormatError> {
+    let base = section.offset;
+    Ok(LayerMetadataHeaderV1 {
+        version: read_u32(bytes, base)?,
+        format: read_u32(bytes, base + 4)?,
+        blob_offset: read_u64(bytes, base + 8)?,
+        blob_length: read_u64(bytes, base + 16)?,
+    })
+}
+
+fn validate_layer_metadata(
+    bytes: &[u8],
+    section: SectionEntry,
+    hdr: &LayerMetadataHeaderV1,
+) -> Result<(), FormatError> {
+    if hdr.version != 1 {
+        return Err(FormatError::InvalidValue {
+            field: "LayerMetadataHeaderV1.version",
+            reason: "unsupported metadata version",
+        });
+    }
+    if hdr.format != 1 {
+        return Err(FormatError::InvalidValue {
+            field: "LayerMetadataHeaderV1.format",
+            reason: "unknown metadata format",
+        });
+    }
+    let header_len = 24u64;
+    let blob_start = hdr.blob_offset;
+    let blob_end = blob_start
+        .checked_add(hdr.blob_length)
+        .ok_or(FormatError::InvalidRange {
+            field: "LayerMetadataHeaderV1.blob_offset/blob_length",
+        })?;
+    let section_end =
+        section
+            .offset
+            .checked_add(section.length)
+            .ok_or(FormatError::InvalidRange {
+                field: "SECTION_LAYER_METADATA offset/length",
+            })?;
+    if section.length < header_len {
+        return Err(FormatError::InvalidRange {
+            field: "SECTION_LAYER_METADATA length",
+        });
+    }
+    if blob_start != section.offset + header_len {
+        return Err(FormatError::InvalidValue {
+            field: "LayerMetadataHeaderV1.blob_offset",
+            reason: "must equal section.offset + header_len",
+        });
+    }
+    if blob_end != section_end {
+        return Err(FormatError::InvalidValue {
+            field: "LayerMetadataHeaderV1.blob_length",
+            reason: "must equal section.length - header_len",
+        });
+    }
+    if blob_end > bytes.len() as u64 {
+        return Err(FormatError::InvalidRange {
+            field: "LayerMetadataHeaderV1.blob_offset/blob_length",
+        });
+    }
+    Ok(())
 }
 
 fn parse_string_dictionary_header(

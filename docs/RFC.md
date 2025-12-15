@@ -148,6 +148,8 @@ Each layer file MUST include, at minimum:
 
 A Relationship Table MAY be included.
 
+A Layer Metadata section MAY be included.
+
 ### 8.3 Schema Compatibility
 
 All layers used together in a single query MUST share identical schemas. If schemas differ, the implementation MUST return an error and MUST NOT silently merge incompatible layers.
@@ -189,7 +191,8 @@ enum SectionKind : u32 {
   SECTION_STRING_DICTIONARY = 1,
   SECTION_CHUNK_TABLE       = 2,
   SECTION_EMBEDDING_MATRIX  = 3,
-  SECTION_RELATIONSHIPS     = 4
+  SECTION_RELATIONSHIPS     = 4,
+  SECTION_LAYER_METADATA    = 5
 };
 
 struct SectionEntry {
@@ -200,7 +203,7 @@ struct SectionEntry {
 };
 ```
 
-The file MUST contain exactly one section each of `SECTION_STRING_DICTIONARY`, `SECTION_CHUNK_TABLE`, and `SECTION_EMBEDDING_MATRIX`. The file MAY contain `SECTION_RELATIONSHIPS`.
+The file MUST contain exactly one section each of `SECTION_STRING_DICTIONARY`, `SECTION_CHUNK_TABLE`, and `SECTION_EMBEDDING_MATRIX`. The file MAY contain `SECTION_RELATIONSHIPS` and/or `SECTION_LAYER_METADATA`.
 
 #### 8.4.4 String Dictionary Section
 
@@ -299,6 +302,39 @@ struct RelationshipRecord {
 
 If `SECTION_RELATIONSHIPS` is absent, `rel_start` and `rel_count` in `ChunkRecord` MUST be `0`.
 
+#### 8.4.8 Layer Metadata Section (Optional)
+
+If present, the Layer Metadata section stores a versioned metadata blob describing how embeddings were produced for this layer.
+
+```c
+enum LayerMetadataFormat : u32 {
+  LAYER_METADATA_JSON = 1
+};
+
+struct LayerMetadataHeaderV1 {
+  u32 version;      // MUST be 1
+  u32 format;       // MUST be LAYER_METADATA_JSON for v1
+  u64 blob_offset;  // MUST equal (section.offset + 24)
+  u64 blob_length;  // MUST equal (section.length - 24)
+};
+```
+
+- For `format == LAYER_METADATA_JSON`, the blob MUST be UTF-8 JSON.
+- Implementations MUST NOT include timestamps in this metadata blob if they claim deterministic/reproducible builds.
+
+The JSON blob SHOULD include at least:
+
+- `v` (u32): metadata schema version (currently `1`).
+- `embedding_profile`: `{ backend, model, revision, dim, output_norm }`.
+  - `output_norm` MUST be explicit (e.g., `"none"` or `"l2"`), because normalization affects determinism and cache keys.
+- `cache_key_alg`: a string or enum identifying the cache key algorithm.
+- `embedder_metadata` (optional): provider/runtime details that help audit and reproduce embeddings, e.g.:
+  - provider name + API base (for remote providers)
+  - runtime name/version (for local runtimes)
+  - model file hashes (e.g., SHA-256) and relevant runtime knobs (e.g., quantization mode)
+
+Implementations SHOULD treat `embedding_profile` as the canonical “compatibility contract” for merging/searching across layers. If an implementation embeds queries (as opposed to receiving an explicit query vector), it SHOULD validate that the active embedder profile matches the layer metadata profile for all layers being queried, and return a clear error if not.
+
 ---
 
 ## 9. Vector Semantics
@@ -308,6 +344,24 @@ If `SECTION_RELATIONSHIPS` is absent, `rel_start` and `rel_count` in `ChunkRecor
 - The implementation MUST support cosine similarity or dot-product similarity.
 - The implementation MUST support brute-force search.
 - The implementation MAY support approximate indexes.
+
+### 9.1 Deterministic Cache Keys (Informative)
+
+To make embedding caches stable across runs, a cache key SHOULD be computed as:
+
+```
+key = sha256(profile_json_v1 || 0x00 || content_utf8)
+```
+
+Where:
+
+- `content_utf8` is the raw UTF-8 bytes of the input text.
+- `profile_json_v1` is a UTF-8 JSON object with keys in this exact order:
+  - `v` (number, value `1`)
+  - `backend` (string)
+  - `model` (string or null)
+  - `revision` (string or null)
+  - `dim` (number)
 
 ---
 

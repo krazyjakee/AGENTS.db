@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, OptionsCommand};
 
 pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.cmd {
@@ -134,5 +134,92 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             }
             crate::commands::web::cmd_web(&root, &bind)
         }
+        Command::Options { dir, cmd } => match cmd {
+            OptionsCommand::Show {
+                base,
+                user,
+                delta,
+                local,
+            } => crate::commands::options::cmd_options_show(
+                &dir,
+                base.as_deref(),
+                user.as_deref(),
+                delta.as_deref(),
+                local.as_deref(),
+                cli.json,
+            ),
+            OptionsCommand::Set {
+                scope,
+                backend,
+                model,
+                revision,
+                model_path,
+                model_sha256,
+                dim,
+                api_base,
+                api_key_env,
+                cache,
+                cache_dir,
+            } => crate::commands::options::cmd_options_set(
+                &dir,
+                &scope,
+                backend.as_deref(),
+                model.as_deref(),
+                revision.as_deref(),
+                model_path.as_deref(),
+                model_sha256.as_deref(),
+                dim,
+                api_base.as_deref(),
+                api_key_env.as_deref(),
+                cache.map(|t| matches!(t, crate::cli::Toggle::On)),
+                cache_dir.as_deref(),
+                cli.json,
+            ),
+            OptionsCommand::Wizard { scope } => {
+                crate::commands::options::cmd_options_wizard(&dir, &scope, cli.json)
+            }
+            OptionsCommand::Allowlist { cmd } => match cmd {
+                crate::cli::AllowlistCommand::List {
+                    base,
+                    user,
+                    delta,
+                    local,
+                } => crate::commands::options::cmd_options_allowlist_list(
+                    &dir,
+                    base.as_deref(),
+                    user.as_deref(),
+                    delta.as_deref(),
+                    local.as_deref(),
+                    cli.json,
+                ),
+                crate::cli::AllowlistCommand::Add {
+                    scope,
+                    model,
+                    revision,
+                    sha256,
+                } => crate::commands::options::cmd_options_allowlist_add(
+                    &dir,
+                    &scope,
+                    &model,
+                    revision.as_deref(),
+                    &sha256,
+                    cli.json,
+                ),
+                crate::cli::AllowlistCommand::Remove {
+                    scope,
+                    model,
+                    revision,
+                } => crate::commands::options::cmd_options_allowlist_remove(
+                    &dir,
+                    &scope,
+                    &model,
+                    revision.as_deref(),
+                    cli.json,
+                ),
+                crate::cli::AllowlistCommand::Clear { scope } => {
+                    crate::commands::options::cmd_options_allowlist_clear(&dir, &scope, cli.json)
+                }
+            },
+        },
     }
 }

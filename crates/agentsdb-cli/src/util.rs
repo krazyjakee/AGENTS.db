@@ -75,11 +75,9 @@ fn visit_dir_wide_docs(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyho
                 continue;
             }
             visit_dir_wide_docs(root, &path, out)?;
-        } else if ty.is_file() {
-            if is_doc_candidate(&path) {
-                let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-                out.push(rel);
-            }
+        } else if ty.is_file() && is_doc_candidate(&path) {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            out.push(rel);
         }
     }
     Ok(())

@@ -55,7 +55,8 @@ pub(crate) fn cmd_compact(
         .context("refuse to write compacted output to a non-writable layer path")?;
 
     let (schema, chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
-    agentsdb_format::write_layer_atomic(&out, &schema, &chunks).context("write compacted layer")?;
+    agentsdb_format::write_layer_atomic(&out, &schema, &chunks, None)
+        .context("write compacted layer")?;
 
     if json {
         #[derive(Serialize)]
@@ -115,7 +116,7 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         let schema = agentsdb_format::schema_of(&file);
         let chunks = agentsdb_format::read_all_chunks(&file)
             .with_context(|| format!("read chunks from {}", path.display()))?;
-        agentsdb_format::write_layer_atomic(&path, &schema, &chunks)
+        agentsdb_format::write_layer_atomic(&path, &schema, &chunks, None)
             .with_context(|| format!("rewrite {}", path.display()))?;
         compacted.push(path);
     }
@@ -313,10 +314,16 @@ mod tests {
                 chunk(1, "canonical", "base a"),
                 chunk(2, "canonical", "base b"),
             ],
+            None,
         )
         .unwrap();
-        agentsdb_format::write_layer_atomic(&user_path, &schema(), &[chunk(100, "note", "user x")])
-            .unwrap();
+        agentsdb_format::write_layer_atomic(
+            &user_path,
+            &schema(),
+            &[chunk(100, "note", "user x")],
+            None,
+        )
+        .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
@@ -340,9 +347,14 @@ mod tests {
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
 
-        agentsdb_format::write_layer_atomic(&base_path, &schema(), &[chunk(1, "canonical", "a")])
-            .unwrap();
-        agentsdb_format::write_layer_atomic(&user_path, &schema(), &[chunk(1, "note", "b")])
+        agentsdb_format::write_layer_atomic(
+            &base_path,
+            &schema(),
+            &[chunk(1, "canonical", "a")],
+            None,
+        )
+        .unwrap();
+        agentsdb_format::write_layer_atomic(&user_path, &schema(), &[chunk(1, "note", "b")], None)
             .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
@@ -360,9 +372,15 @@ mod tests {
         let junk_path = dir.join("junk.db");
         let other_path = dir.join("notes.txt");
 
-        agentsdb_format::write_layer_atomic(&a_path, &schema(), &[chunk(1, "canonical", "a")])
+        agentsdb_format::write_layer_atomic(
+            &a_path,
+            &schema(),
+            &[chunk(1, "canonical", "a")],
+            None,
+        )
+        .unwrap();
+        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")], None)
             .unwrap();
-        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")]).unwrap();
         std::fs::write(&junk_path, b"not an agentsdb layer").unwrap();
         std::fs::write(&other_path, b"ignore").unwrap();
 

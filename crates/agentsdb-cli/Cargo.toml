@@ -1,8 +1,17 @@
 [package]
 name = "agentsdb-cli"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT"
+
+[features]
+default = []
+candle = ["agentsdb-embeddings/candle"]
+ort = ["agentsdb-embeddings/ort"]
+openai = ["agentsdb-embeddings/openai"]
+voyage = ["agentsdb-embeddings/voyage"]
+cohere = ["agentsdb-embeddings/cohere"]
+all-embedders = ["candle", "ort", "openai", "voyage", "cohere"]
 
 [[bin]]
 name = "agentsdb"
@@ -12,6 +21,7 @@ path = "src/main.rs"
 agentsdb-format = { path = "../agentsdb-format" }
 agentsdb-query = { path = "../agentsdb-query" }
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
+agentsdb-embeddings = { path = "../agentsdb-embeddings" }
 agentsdb-mcp = { path = "../agentsdb-mcp" }
 agentsdb-web = { path = "../agentsdb-web" }
 anyhow = "1.0"

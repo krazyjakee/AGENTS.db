@@ -21,6 +21,7 @@ pub(crate) fn cmd_promote(
     let from_file =
         agentsdb_format::LayerFile::open(from_path).with_context(|| format!("open {from_path}"))?;
     let from_schema = agentsdb_format::schema_of(&from_file);
+    let from_metadata = from_file.layer_metadata_bytes().map(|b| b.to_vec());
     let from_chunks = agentsdb_format::read_all_chunks(&from_file)?;
 
     let by_id: BTreeMap<u32, agentsdb_format::ChunkInput> =
@@ -49,9 +50,15 @@ pub(crate) fn cmd_promote(
         {
             anyhow::bail!("schema mismatch between {from_path} and {to_path}");
         }
-        agentsdb_format::append_layer_atomic(to_path, &mut promote).context("append")?;
+        agentsdb_format::append_layer_atomic(to_path, &mut promote, None).context("append")?;
     } else {
-        agentsdb_format::write_layer_atomic(to_path, &from_schema, &promote).context("write")?;
+        agentsdb_format::write_layer_atomic(
+            to_path,
+            &from_schema,
+            &promote,
+            from_metadata.as_deref(),
+        )
+        .context("write")?;
     }
 
     if json {

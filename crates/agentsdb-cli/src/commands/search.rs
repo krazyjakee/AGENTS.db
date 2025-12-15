@@ -1,7 +1,8 @@
 use anyhow::Context;
 
-use agentsdb_core::embed::hash_embed;
 use agentsdb_core::types::SearchFilters;
+use agentsdb_embeddings::config::roll_up_embedding_options;
+use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
 use agentsdb_query::{LayerSet, SearchQuery};
 
 use crate::types::{SearchJson, SearchResultJson};
@@ -22,12 +23,41 @@ pub(crate) fn cmd_search(
     }
 
     let dim = opened[0].1.embedding_dim();
+    let mut local = None;
+    let mut user = None;
+    let mut delta = None;
+    let mut base = None;
+    for (layer_id, file) in &opened {
+        match layer_id {
+            agentsdb_core::types::LayerId::Local => local = Some(file),
+            agentsdb_core::types::LayerId::User => user = Some(file),
+            agentsdb_core::types::LayerId::Delta => delta = Some(file),
+            agentsdb_core::types::LayerId::Base => base = Some(file),
+        }
+    }
+    let options =
+        roll_up_embedding_options(&[local, user, delta, base]).context("roll up options")?;
+    if let Some(cfg_dim) = options.dim {
+        if cfg_dim != dim {
+            anyhow::bail!(
+                "embedding dim mismatch (layers are dim={dim}, options specify dim={cfg_dim})"
+            );
+        }
+    }
+    let embedder = options
+        .into_embedder(dim)
+        .context("resolve embedder from options")?;
     let embedding = match (query, query_vec, query_vec_file) {
         (Some(q), None, None) => {
             if q.trim().is_empty() {
                 anyhow::bail!("--query must be non-empty");
             }
-            hash_embed(&q, dim)
+            for (_, file) in &opened {
+                ensure_layer_metadata_compatible_with_embedder(file, embedder.as_ref())
+                    .context("validate layer metadata vs embedder")?;
+            }
+            let out = embedder.embed(&[q])?;
+            out.into_iter().next().unwrap_or_else(|| vec![0.0; dim])
         }
         (None, Some(v), None) => parse_vec_json(&v)?,
         (None, None, Some(path)) => {

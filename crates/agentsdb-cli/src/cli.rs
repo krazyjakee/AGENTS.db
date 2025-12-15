@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "agentsdb",
     version,
-    long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - `search --query` uses a deterministic hash embedding (not a semantic model)."
+    long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - Embedding backends are configured via rolled-up options (default: deterministic hash)."
 )]
 pub(crate) struct Cli {
     /// Emit machine-readable JSON instead of human output.
@@ -231,6 +231,138 @@ pub(crate) enum Command {
         #[arg(long, default_value = "127.0.0.1:3030")]
         bind: String,
     },
+    /// Show or update embedding-related options stored in standard layer files.
+    Options {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        #[command(subcommand)]
+        cmd: OptionsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum OptionsCommand {
+    /// Print the rolled-up embedding options and where they came from.
+    Show {
+        /// Override the base layer path (default: DIR/AGENTS.db).
+        #[arg(long)]
+        base: Option<String>,
+        /// Override the user layer path (default: DIR/AGENTS.user.db).
+        #[arg(long)]
+        user: Option<String>,
+        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
+        #[arg(long)]
+        delta: Option<String>,
+        /// Override the local layer path (default: DIR/AGENTS.local.db).
+        #[arg(long)]
+        local: Option<String>,
+    },
+    /// Append a new options record to a writable standard layer file.
+    Set {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Embedder backend (e.g. `hash`, `candle`, `ort`, `openai`, `voyage`, `cohere`).
+        #[arg(long)]
+        backend: Option<String>,
+        /// Embedding model identifier (provider-specific; currently unused for `hash`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Embedding model revision/version (provider-specific).
+        #[arg(long)]
+        revision: Option<String>,
+        /// Local model path (dir or file) for offline/local backends (e.g. `ort`).
+        #[arg(long)]
+        model_path: Option<String>,
+        /// Optional expected SHA-256 (lowercase hex) for local downloaded model bytes (e.g. ONNX).
+        #[arg(long)]
+        model_sha256: Option<String>,
+        /// Embedding dimension (>0; must match existing layer schemas).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        dim: Option<u32>,
+        /// API base URL for remote providers (e.g. OpenAI-compatible servers).
+        #[arg(long)]
+        api_base: Option<String>,
+        /// Environment variable name holding the provider API key.
+        #[arg(long)]
+        api_key_env: Option<String>,
+        /// Enable or disable the embedding cache.
+        #[arg(long, value_enum)]
+        cache: Option<Toggle>,
+        /// Override the embedding cache directory.
+        #[arg(long)]
+        cache_dir: Option<String>,
+    },
+    /// Interactive prompt for configuring embedding options.
+    Wizard {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+    },
+    /// Manage a known-good SHA-256 allowlist for local models (per model+revision).
+    Allowlist {
+        #[command(subcommand)]
+        cmd: AllowlistCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AllowlistCommand {
+    /// Print the rolled-up allowlist.
+    List {
+        /// Override the base layer path (default: DIR/AGENTS.db).
+        #[arg(long)]
+        base: Option<String>,
+        /// Override the user layer path (default: DIR/AGENTS.user.db).
+        #[arg(long)]
+        user: Option<String>,
+        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
+        #[arg(long)]
+        delta: Option<String>,
+        /// Override the local layer path (default: DIR/AGENTS.local.db).
+        #[arg(long)]
+        local: Option<String>,
+    },
+    /// Add or update an allowlist entry.
+    Add {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Model identifier (e.g. `all-minilm-l6-v2`).
+        #[arg(long)]
+        model: String,
+        /// Model revision/version (default: `main`).
+        #[arg(long)]
+        revision: Option<String>,
+        /// Expected SHA-256 (lowercase hex) for the downloaded model bytes.
+        #[arg(long)]
+        sha256: String,
+    },
+    /// Remove an allowlist entry.
+    Remove {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Model identifier (e.g. `all-minilm-l6-v2`).
+        #[arg(long)]
+        model: String,
+        /// Model revision/version (default: `main`).
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    /// Clear the allowlist in the target layer (higher layers still apply).
+    Clear {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum Toggle {
+    On,
+    Off,
 }
 
 #[cfg(test)]
@@ -310,6 +442,48 @@ mod tests {
                 assert_eq!(bind, "127.0.0.1:3030");
             }
             _ => panic!("expected web command"),
+        }
+    }
+
+    #[test]
+    fn options_parses_defaults() {
+        let cli =
+            Cli::try_parse_from(["agentsdb", "options", "show"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::Options { dir, cmd } => {
+                assert_eq!(dir, ".");
+                match cmd {
+                    OptionsCommand::Show {
+                        base,
+                        user,
+                        delta,
+                        local,
+                    } => {
+                        assert_eq!(base, None);
+                        assert_eq!(user, None);
+                        assert_eq!(delta, None);
+                        assert_eq!(local, None);
+                    }
+                    _ => panic!("expected show subcommand"),
+                }
+            }
+            _ => panic!("expected options command"),
+        }
+    }
+
+    #[test]
+    fn options_wizard_parses_defaults() {
+        let cli =
+            Cli::try_parse_from(["agentsdb", "options", "wizard"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::Options { dir, cmd } => {
+                assert_eq!(dir, ".");
+                match cmd {
+                    OptionsCommand::Wizard { scope } => assert_eq!(scope, "local"),
+                    _ => panic!("expected wizard subcommand"),
+                }
+            }
+            _ => panic!("expected options command"),
         }
     }
 

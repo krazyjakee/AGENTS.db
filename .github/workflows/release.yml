@@ -39,7 +39,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build -p agentsdb-cli --release --locked --target ${{ matrix.target }}
+        run: cargo build -p agentsdb-cli --release --locked --target ${{ matrix.target }} --features all-embedders
 
       - name: Package (unix)
         if: runner.os != 'Windows'
