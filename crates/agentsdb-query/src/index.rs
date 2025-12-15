@@ -36,7 +36,11 @@ impl LayerIndex {
         expected_layer_sha256: [u8; 32],
     ) -> Result<Option<Self>, Error> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(&path)?;
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
         let mmap = unsafe { Mmap::map(&file)? };
         let bytes = mmap.as_ref();
 
