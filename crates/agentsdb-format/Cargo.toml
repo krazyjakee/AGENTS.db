@@ -4,6 +4,9 @@ version = "0.1.5"
 edition = "2021"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 agentsdb-core = { path = "../agentsdb-core" }
 memmap2 = "0.9"

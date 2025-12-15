@@ -1,3 +1,5 @@
+//! This module contains the implementation of the various subcommands for the `agentsdb-cli` tool.
+
 pub(crate) mod clean;
 pub(crate) mod compact;
 pub(crate) mod compile;

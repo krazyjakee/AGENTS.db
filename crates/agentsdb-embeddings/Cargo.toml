@@ -3,6 +3,9 @@ name = "agentsdb-embeddings"
 version = "0.1.5"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 # Local embedders (heavy dependencies; opt-in).

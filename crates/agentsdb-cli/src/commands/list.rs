@@ -5,6 +5,7 @@ use crate::types::ListEntryJson;
 use crate::util::{fmt_bytes_human, fmt_u64_commas};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents a single AGENTS.db layer file found during listing.
 struct ListedLayer {
     file_name: String,
     chunk_count: u64,

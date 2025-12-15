@@ -7,6 +7,7 @@ use agentsdb_query::{
 };
 
 #[derive(Debug, Serialize)]
+/// Represents a single indexed layer in the JSON output for the `index` command.
 struct IndexEntryJson {
     layer: String,
     layer_path: String,
@@ -14,6 +15,7 @@ struct IndexEntryJson {
 }
 
 #[derive(Debug, Serialize)]
+/// Represents the JSON output structure for the `index` command.
 struct IndexJson {
     built: Vec<IndexEntryJson>,
 }

@@ -15,6 +15,7 @@ fn now_unix_ms() -> u64 {
 }
 
 #[derive(Debug, Clone)]
+/// Represents the resolved paths for delta, user, and proposals layers.
 struct ResolvedPaths {
     delta: PathBuf,
     user: PathBuf,
@@ -58,6 +59,9 @@ fn resolve_layer_label(dir: &Path, paths: &ResolvedPaths, label: &str) -> PathBu
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Represents a proposal event, such as a proposal, acceptance, or rejection.
+///
+/// This struct is deserialized from the `meta.proposal_event` chunk content.
 struct ProposalEvent {
     #[serde(default)]
     action: Option<String>, // propose | accept | reject
@@ -90,6 +94,7 @@ struct ProposalEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Represents the current status of a proposal.
 enum ProposalStatus {
     Pending,
     Accepted,
@@ -97,6 +102,7 @@ enum ProposalStatus {
 }
 
 #[derive(Debug, Clone)]
+/// Represents the accumulated state of a proposal, derived from a series of `ProposalEvent`s.
 struct ProposalState {
     proposal_id: u32,
     context_id: u32,
@@ -421,12 +427,14 @@ pub(crate) fn cmd_proposals_show(
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents a chunk source in JSON format for display.
 struct ChunkSourceJson {
     kind: String,
     value: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents a chunk's data in JSON format for display.
 struct ChunkJson {
     id: u32,
     kind: String,
@@ -466,6 +474,7 @@ impl From<agentsdb_format::ChunkInput> for ChunkJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents the JSON output structure for a proposal's state.
 struct ProposalStateJson {
     proposal_id: u32,
     context_id: u32,
@@ -506,6 +515,7 @@ impl From<ProposalState> for ProposalStateJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents the output of a promotion operation in JSON format.
 struct PromoteOut {
     ok: bool,
     from: String,
@@ -522,9 +532,14 @@ pub(crate) fn cmd_proposals_accept(
     proposals_layer: Option<&str>,
     ids: &str,
     skip_existing: bool,
-    yes: bool,
+    _yes: bool,
     json: bool,
 ) -> anyhow::Result<()> {
+    // Implements the `proposals accept` command, which accepts proposals by promoting
+    // their chunks into the user layer.
+    //
+    // This function handles validating proposals, performing the promotion, and recording
+    // the acceptance event.
     let dir = Path::new(dir);
     let paths = resolve_paths(dir, delta, user, proposals_layer);
     let states = load_states(&paths.proposals_layer)?;
@@ -562,13 +577,12 @@ pub(crate) fn cmd_proposals_accept(
         let from_abs = resolve_layer_label(dir, &paths, &from_rel);
         let to_abs = resolve_layer_label(dir, &paths, &to_rel);
         let ids: Vec<u32> = refs.iter().map(|(_, cid)| *cid).collect();
-        let out = crate::commands::promote::promote_chunks(
+        let out = agentsdb_ops::promote::promote_chunks(
             &from_abs.to_string_lossy(),
             &to_abs.to_string_lossy(),
             &ids,
             skip_existing,
             true, // tombstone_source
-            yes || json,
         )?;
         promoted.extend(out.promoted);
         skipped.extend(out.skipped);
@@ -634,6 +648,9 @@ pub(crate) fn cmd_proposals_reject(
     reason: Option<&str>,
     json: bool,
 ) -> anyhow::Result<()> {
+    // Implements the `proposals reject` command, which rejects proposals without promoting them.
+    //
+    // This function handles validating proposals and recording the rejection event with an optional reason.
     let dir = Path::new(dir);
     let paths = resolve_paths(dir, delta, user, proposals_layer);
     let states = load_states(&paths.proposals_layer)?;

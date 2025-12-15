@@ -12,6 +12,7 @@ use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
 use crate::util::{assign_stable_id, collect_files};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents the action taken when writing a compiled layer file.
 pub(crate) enum LayerWriteAction {
     Created,
     Replaced,

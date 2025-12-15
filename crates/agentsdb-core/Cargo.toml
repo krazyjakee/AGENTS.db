@@ -4,6 +4,9 @@ version = "0.1.5"
 edition = "2021"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"], optional = true }
 thiserror = "2.0"

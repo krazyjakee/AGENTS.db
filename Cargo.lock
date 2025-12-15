@@ -16,6 +16,7 @@ dependencies = [
  "agentsdb-embeddings",
  "agentsdb-format",
  "agentsdb-mcp",
+ "agentsdb-ops",
  "agentsdb-query",
  "agentsdb-web",
  "anyhow",
@@ -75,6 +76,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentsdb-ops"
+version = "0.1.5"
+dependencies = [
+ "agentsdb-core",
+ "agentsdb-embeddings",
+ "agentsdb-format",
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agentsdb-query"
 version = "0.1.5"
 dependencies = [
@@ -93,6 +106,7 @@ dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
  "agentsdb-format",
+ "agentsdb-ops",
  "anyhow",
  "serde",
  "serde_json",

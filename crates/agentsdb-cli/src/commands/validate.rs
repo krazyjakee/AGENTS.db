@@ -1,6 +1,10 @@
 use crate::types::ValidateJson;
 
 pub(crate) fn cmd_validate(path: &str, json: bool) -> anyhow::Result<()> {
+    // Implements the `validate` command, which validates that a layer file is readable and well-formed.
+    //
+    // This function attempts to open and parse the specified layer file, reporting success or any errors encountered.
+    // Output can be formatted as human-readable text or JSON.
     let err = agentsdb_format::LayerFile::open(path).err();
     if json {
         let out = ValidateJson {

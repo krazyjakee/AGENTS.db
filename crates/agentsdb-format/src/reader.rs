@@ -921,7 +921,9 @@ fn validate_chunk_records(
     }
 
     let mut ids = if !allow_duplicate_ids {
-        Some(HashSet::with_capacity(chunk_header.chunk_count.min(1024) as usize))
+        Some(HashSet::with_capacity(
+            chunk_header.chunk_count.min(1024) as usize
+        ))
     } else {
         None
     };

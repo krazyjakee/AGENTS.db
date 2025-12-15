@@ -1,0 +1,15 @@
+# Clippy configuration for AGENTS.db
+# This file defines custom lint rules for the project
+
+# Cognitive complexity threshold
+# Lower values enforce simpler functions
+cognitive-complexity-threshold = 25
+
+# Documentation word count minimum for public items
+# Ensures adequate documentation for public APIs
+doc-valid-idents = ["AGENTS", "MCP", "RFC", "CLI", "API", "JSON", "SHA256", "UTF8", "UTF-8", "WebAssembly", "Wasm"]
+
+# Maximum allowed function lines of code
+# Helps keep functions focused and testable
+too-many-arguments-threshold = 8
+type-complexity-threshold = 500

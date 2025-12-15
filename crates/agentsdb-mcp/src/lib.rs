@@ -339,20 +339,17 @@ fn handle_request(config: &ServerConfig, req: &Request) -> Result<Value, RpcErro
         TOOL_AGENTS_SEARCH | TOOL_AGENTS_SEARCH_LEGACY => {
             let params: SearchParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_search(config, params)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))
+            handle_search(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         TOOL_AGENTS_CONTEXT_WRITE | TOOL_AGENTS_CONTEXT_WRITE_LEGACY => {
             let params: WriteParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_write(config, params)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))
+            handle_write(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         TOOL_AGENTS_CONTEXT_PROPOSE | TOOL_AGENTS_CONTEXT_PROPOSE_LEGACY => {
             let params: ProposeParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_propose(config, params)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))
+            handle_propose(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         other => Err(RpcError::method_not_found(format!(
             "unknown method: {other}"
@@ -446,20 +443,17 @@ fn handle_tools_call(config: &ServerConfig, params: ToolCallParams) -> Result<Va
         TOOL_AGENTS_SEARCH | TOOL_AGENTS_SEARCH_LEGACY => {
             let args: SearchParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_search(config, args)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))?
+            handle_search(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         TOOL_AGENTS_CONTEXT_WRITE | TOOL_AGENTS_CONTEXT_WRITE_LEGACY => {
             let args: WriteParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_write(config, args)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))?
+            handle_write(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         TOOL_AGENTS_CONTEXT_PROPOSE | TOOL_AGENTS_CONTEXT_PROPOSE_LEGACY => {
             let args: ProposeParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_propose(config, args)
-                .map_err(|e| RpcError::internal_error(format!("{e:#}")))?
+            handle_propose(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         other => return Err(RpcError::method_not_found(format!("unknown tool: {other}"))),
     };

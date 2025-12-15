@@ -1,5 +1,8 @@
 use crate::cli::{AllowlistCommand, Cli, Command, LayerArgs, OptionsCommand, ProposalsCommand};
 
+/// Runs the main application logic based on the provided CLI arguments.
+///
+/// This function dispatches to the appropriate command handler based on the `cli.cmd` value.
 pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
     let json = cli.json;
     match cli.cmd {

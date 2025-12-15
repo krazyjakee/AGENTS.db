@@ -18,6 +18,10 @@ pub(crate) fn cmd_search(
     use_index: bool,
     json: bool,
 ) -> anyhow::Result<()> {
+    // Implements the `search` command, which searches one or more layers using vector similarity.
+    //
+    // This function handles parsing query input (text, vector, or vector file), embedding the query,
+    // and performing the search across specified layers with optional filtering and index usage.
     let opened = layers.open().context("open layers")?;
     if opened.is_empty() {
         anyhow::bail!("no layers provided (use --base/--user/--delta/--local)");

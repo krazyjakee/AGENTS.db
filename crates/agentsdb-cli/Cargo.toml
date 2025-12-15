@@ -4,6 +4,9 @@ version = "0.1.5"
 edition = "2021"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 candle = ["agentsdb-embeddings/candle"]
@@ -23,6 +26,7 @@ agentsdb-query = { path = "../agentsdb-query" }
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
 agentsdb-embeddings = { path = "../agentsdb-embeddings" }
 agentsdb-mcp = { path = "../agentsdb-mcp" }
+agentsdb-ops = { path = "../agentsdb-ops" }
 agentsdb-web = { path = "../agentsdb-web" }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

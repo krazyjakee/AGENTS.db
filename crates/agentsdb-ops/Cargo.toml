@@ -1,18 +1,16 @@
 [package]
-name = "agentsdb-query"
+name = "agentsdb-ops"
 version = "0.1.5"
 edition = "2021"
-license = "MIT"
 
 [lints]
 workspace = true
 
 [dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
 agentsdb-format = { path = "../agentsdb-format" }
 agentsdb-embeddings = { path = "../agentsdb-embeddings" }
-memmap2 = "0.9"
-serde = { version = "1.0", features = ["derive"] }
-
-[dev-dependencies]
-tempfile = "3.10"

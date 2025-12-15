@@ -1,0 +1,143 @@
+use anyhow::Context;
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use crate::util::now_unix_ms;
+
+#[derive(Debug, Default, Serialize)]
+pub struct PromoteOutcome {
+    pub promoted: Vec<u32>,
+    pub skipped: Vec<u32>,
+}
+
+/// Promote chunks from one layer to another
+///
+/// # Arguments
+/// * `from_path` - Source layer path
+/// * `to_path` - Destination layer path
+/// * `ids` - Chunk IDs to promote
+/// * `skip_existing` - If true, skip chunks that already exist in destination
+/// * `tombstone_source` - If true, add tombstone markers in source layer after promotion
+///
+/// # Returns
+/// A PromoteOutcome containing lists of promoted and skipped IDs
+pub fn promote_chunks(
+    from_path: &str,
+    to_path: &str,
+    ids: &[u32],
+    skip_existing: bool,
+    tombstone_source: bool,
+) -> anyhow::Result<PromoteOutcome> {
+    if ids.is_empty() {
+        anyhow::bail!("ids must be non-empty");
+    }
+
+    agentsdb_format::ensure_writable_layer_path_allow_user(to_path).context("permission check")?;
+
+    let from_file =
+        agentsdb_format::LayerFile::open(from_path).with_context(|| format!("open {from_path}"))?;
+    let from_schema = agentsdb_format::schema_of(&from_file);
+    let from_metadata = from_file.layer_metadata_bytes().map(|b| b.to_vec());
+    let from_chunks = agentsdb_format::read_all_chunks(&from_file)?;
+
+    let by_id: BTreeMap<u32, agentsdb_format::ChunkInput> =
+        from_chunks.into_iter().map(|c| (c.id, c)).collect();
+
+    let to_p = Path::new(to_path);
+    let mut to_existing_ids: BTreeSet<u32> = BTreeSet::new();
+    if to_p.exists() {
+        let to_file =
+            agentsdb_format::LayerFile::open(to_path).with_context(|| format!("open {to_path}"))?;
+        let to_schema = agentsdb_format::schema_of(&to_file);
+        if to_schema.dim != from_schema.dim
+            || to_schema.element_type != from_schema.element_type
+            || to_schema.quant_scale.to_bits() != from_schema.quant_scale.to_bits()
+        {
+            anyhow::bail!("schema mismatch between {from_path} and {to_path}");
+        }
+        to_existing_ids = agentsdb_format::read_all_chunks(&to_file)?
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+    }
+
+    let mut filtered = Vec::new();
+    let mut skipped = Vec::new();
+    for id in ids {
+        if to_existing_ids.contains(id) {
+            if skip_existing {
+                skipped.push(*id);
+                continue;
+            }
+            anyhow::bail!(
+                "destination already contains id {id} (use skip_existing=true to skip duplicates)"
+            );
+        }
+        filtered.push(*id);
+    }
+
+    if filtered.is_empty() {
+        return Ok(PromoteOutcome {
+            promoted: Vec::new(),
+            skipped,
+        });
+    }
+
+    let mut promote = Vec::new();
+    for id in &filtered {
+        let Some(c) = by_id.get(id) else {
+            anyhow::bail!("id {id} not found in {from_path}");
+        };
+        let mut c = c.clone();
+        if c.author != "human" {
+            c.author = "human".to_string();
+        }
+        promote.push(c);
+    }
+
+    if to_p.exists() {
+        agentsdb_format::append_layer_atomic(to_path, &mut promote, None).context("append")?;
+    } else {
+        agentsdb_format::write_layer_atomic(
+            to_path,
+            &from_schema,
+            &promote,
+            from_metadata.as_deref(),
+        )
+        .context("write")?;
+    }
+
+    // Tombstone promoted chunks in source layer if requested
+    if tombstone_source && !filtered.is_empty() {
+        let now_ms = now_unix_ms();
+
+        let mut tombstones = Vec::new();
+        for id in &filtered {
+            let chunk = by_id
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("chunk id {id} not found in {from_path}"))?;
+
+            let tombstone = agentsdb_format::ChunkInput {
+                id: 0, // Will be auto-assigned
+                kind: "tombstone".to_string(),
+                content: format!("Promoted chunk {} to {}", id, to_path),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: now_ms,
+                embedding: chunk.embedding.clone(),
+                sources: vec![agentsdb_format::ChunkSource::ChunkId(*id)],
+            };
+            tombstones.push(tombstone);
+        }
+
+        agentsdb_format::append_layer_atomic(from_path, &mut tombstones, None)
+            .context("append tombstones to source layer")?;
+    }
+
+    Ok(PromoteOutcome {
+        promoted: filtered,
+        skipped,
+    })
+}

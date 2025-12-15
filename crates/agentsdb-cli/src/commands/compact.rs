@@ -200,7 +200,6 @@ fn ensure_nonzero_unique_ids(chunks: &[agentsdb_format::ChunkInput]) -> anyhow::
     Ok(())
 }
 
-
 fn apply_default_layer_paths(
     base: Option<&str>,
     user: Option<&str>,

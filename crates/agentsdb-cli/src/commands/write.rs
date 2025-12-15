@@ -22,6 +22,11 @@ pub(crate) fn cmd_write(
     source_chunks: &[u32],
     json: bool,
 ) -> anyhow::Result<()> {
+    // Implements the `write` command, which appends a chunk to a writable layer file.
+    //
+    // This function handles creating a new chunk with specified content, kind, confidence,
+    // and optional embedding/sources, then appending it to the designated layer. It also
+    // handles schema validation and embedding generation if an embedding is not provided.
     if scope != "local" && scope != "delta" {
         anyhow::bail!("--scope must be 'local' or 'delta'");
     }

@@ -3,6 +3,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Represents all possible errors that can occur within the `agentsdb-core` crate.
+    ///
+    /// This enum consolidates various error types, making error handling more consistent.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -18,6 +21,9 @@ pub enum Error {
 
 #[derive(Debug, Error)]
 pub enum FormatError {
+    /// Represents errors specifically related to the AGENTS.db file format.
+    ///
+    /// These errors typically occur during parsing or validation of a `.db` file.
     #[error("truncated input at byte {at}, need {needed} bytes")]
     Truncated { at: u64, needed: usize },
 
@@ -76,12 +82,18 @@ pub enum FormatError {
 
 #[derive(Debug, Error)]
 pub enum SchemaError {
+    /// Represents errors related to schema mismatches between layers.
+    ///
+    /// This typically occurs when attempting to combine or operate on layers with incompatible schemas.
     #[error("schema mismatch: {0}")]
     Mismatch(&'static str),
 }
 
 #[derive(Debug, Error)]
 pub enum PermissionError {
+    /// Represents errors related to write permissions for AGENTS.db layers.
+    ///
+    /// This error occurs when an attempt is made to write to a layer that is not designated as writable.
     #[error("writes are not permitted to {path:?}")]
     WriteNotPermitted { path: PathBuf },
 }

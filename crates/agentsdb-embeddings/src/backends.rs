@@ -29,6 +29,10 @@ pub fn local_candle_embedder(
     revision: Option<&str>,
     expected_model_sha256: Option<&str>,
 ) -> anyhow::Result<Box<dyn Embedder + Send + Sync>> {
+    // Creates a new `Embedder` instance using the Candle backend for local inference.
+    //
+    // This function downloads and loads a specified BERT-based model via `hf-hub`
+    // and initializes it for embedding tasks.
     Ok(Box::new(CandleEmbedder::new(
         dim,
         model,
@@ -39,6 +43,8 @@ pub fn local_candle_embedder(
 
 #[cfg(feature = "candle")]
 struct CandleEmbedder {
+    /// An `Embedder` implementation that uses the Candle machine learning framework
+    /// for local, on-device embedding inference.
     profile: EmbeddingProfile,
     model_sha256: Option<String>,
     model: candle_transformers::models::bert::BertModel,
@@ -240,6 +246,10 @@ pub fn openai_embedder(
     api_base: Option<&str>,
     api_key_env: Option<&str>,
 ) -> anyhow::Result<Box<dyn Embedder + Send + Sync>> {
+    // Creates a new `Embedder` instance for the OpenAI API.
+    //
+    // This function sets up the necessary API key and base URL for communicating
+    // with OpenAI's embedding service.
     let api_key_env = api_key_env.unwrap_or("OPENAI_API_KEY");
     let api_key = require_env(api_key_env).context("resolve OpenAI API key")?;
     let api_base = api_base.unwrap_or("https://api.openai.com");
@@ -250,6 +260,10 @@ pub fn openai_embedder(
 
 #[cfg(feature = "openai")]
 struct OpenAiEmbedder {
+    /// An `Embedder` implementation for interacting with the OpenAI embeddings API.
+    ///
+    /// This struct handles API requests, response parsing, and metadata collection
+    /// for OpenAI embedding models.
     profile: EmbeddingProfile,
     api_base: String,
     api_key: String,

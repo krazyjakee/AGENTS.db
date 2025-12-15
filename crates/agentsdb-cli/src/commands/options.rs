@@ -16,6 +16,7 @@ fn now_unix_ms() -> u64 {
 }
 
 #[derive(Debug, Clone)]
+/// Represents the resolved paths for the various AGENTS.db layers.
 struct ResolvedPaths {
     base: PathBuf,
     user: PathBuf,
@@ -61,6 +62,7 @@ fn last_options_patch_in_path(path: &Path) -> anyhow::Result<Option<EmbeddingOpt
 }
 
 #[derive(Serialize)]
+/// Represents an embedding options patch in JSON format.
 struct PatchJson {
     backend: Option<String>,
     model: Option<String>,
@@ -92,6 +94,7 @@ impl From<EmbeddingOptionsPatch> for PatchJson {
 }
 
 #[derive(Serialize)]
+/// Represents resolved embedding options in JSON format.
 struct ResolvedJson {
     backend: String,
     model: Option<String>,
@@ -134,6 +137,7 @@ impl From<ResolvedEmbeddingOptions> for ResolvedJson {
 }
 
 #[derive(Serialize)]
+/// Represents a layer's options and existence in JSON format.
 struct LayerJson {
     path: String,
     exists: bool,
@@ -464,6 +468,7 @@ pub(crate) fn cmd_options_allowlist_clear(
     write_allowlist_record(dir, scope, record, json)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cmd_options_set(
     dir: &str,
     scope: &str,

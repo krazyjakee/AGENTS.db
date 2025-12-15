@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Args, Clone, Debug, Default)]
+/// Arguments for specifying various AGENTS.db layers.
 pub(crate) struct LayerArgs {
     #[arg(long)]
     pub(crate) base: Option<String>,
@@ -18,6 +19,9 @@ pub(crate) struct LayerArgs {
     version,
     long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - Embedding backends are configured via rolled-up options (default: deterministic hash)."
 )]
+/// Main command-line interface structure for the agentsdb tool.
+///
+/// This struct uses `clap` to parse command-line arguments and subcommands.
 pub(crate) struct Cli {
     /// Emit machine-readable JSON instead of human output.
     #[arg(long)]
@@ -331,6 +335,7 @@ pub(crate) enum Command {
 }
 
 #[derive(Subcommand)]
+/// Subcommands for managing embedding-related options.
 pub(crate) enum OptionsCommand {
     /// Print the rolled-up embedding options and where they came from.
     Show {
@@ -387,6 +392,7 @@ pub(crate) enum OptionsCommand {
 }
 
 #[derive(Subcommand)]
+/// Subcommands for managing the SHA-256 allowlist for local models.
 pub(crate) enum AllowlistCommand {
     /// Print the rolled-up allowlist.
     List {
@@ -429,6 +435,7 @@ pub(crate) enum AllowlistCommand {
 }
 
 #[derive(Subcommand)]
+/// Subcommands for reviewing and managing MCP promotion proposals.
 pub(crate) enum ProposalsCommand {
     /// List proposals and their current status.
     List {
@@ -466,6 +473,7 @@ pub(crate) enum ProposalsCommand {
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
+/// Represents a toggle state, either on or off.
 pub(crate) enum Toggle {
     On,
     Off,

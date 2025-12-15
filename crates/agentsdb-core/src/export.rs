@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExportBundleV1 {
+    /// Represents the top-level structure of a complete AGENTS.db export bundle (version 1).
+    ///
+    /// This bundle contains metadata about the export tool and a collection of exported layers.
     pub format: String, // "agentsdb.export.v1"
     pub tool: ExportToolInfo,
     pub layers: Vec<ExportLayerV1>,
@@ -12,6 +15,7 @@ pub struct ExportBundleV1 {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExportToolInfo {
+    /// Provides information about the tool that generated the export.
     pub name: String,
     pub version: String,
 }
@@ -19,6 +23,9 @@ pub struct ExportToolInfo {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExportLayerV1 {
+    /// Represents a single exported AGENTS.db layer (version 1).
+    ///
+    /// Contains the layer's path, optional logical ID, schema, metadata, and all its chunks.
     /// Layer path (as referenced by the caller; typically relative to a root).
     pub path: String,
     /// Optional logical layer id: "base" | "user" | "delta" | "local".
@@ -34,6 +41,9 @@ pub struct ExportLayerV1 {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExportLayerSchemaV1 {
+    /// Represents the schema of an exported AGENTS.db layer (version 1).
+    ///
+    /// This includes the embedding dimension, element type, and quantization scale.
     pub dim: u32,
     pub element_type: String, // "f32" | "i8"
     pub quant_scale: f32,
@@ -42,6 +52,10 @@ pub struct ExportLayerSchemaV1 {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct ExportChunkV1 {
+    /// Represents a single exported chunk of data (version 1).
+    ///
+    /// Contains the chunk's ID, kind, content, author, confidence, creation timestamp,
+    /// sources, optional embedding, and content SHA-256 hash.
     pub id: u32,
     pub kind: String,
     #[cfg_attr(feature = "serde", serde(default))]
@@ -60,6 +74,9 @@ pub struct ExportChunkV1 {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", serde(tag = "type"))]
 pub enum ExportSourceV1 {
+    /// Represents a source reference for an exported chunk (version 1).
+    ///
+    /// Can be either a reference to another chunk by its ID or a free-form string.
     #[cfg_attr(feature = "serde", serde(rename = "chunk_id"))]
     ChunkId { id: u32 },
     #[cfg_attr(feature = "serde", serde(rename = "source_string"))]
@@ -70,6 +87,9 @@ pub enum ExportSourceV1 {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", serde(tag = "type"))]
 pub enum ExportNdjsonRecordV1 {
+    /// Represents a single record in the NDJSON export format (version 1).
+    ///
+    /// This enum allows for streaming export of header, layer metadata, and individual chunks.
     #[cfg_attr(feature = "serde", serde(rename = "header"))]
     Header {
         format: String, // "agentsdb.export.ndjson.v1"
