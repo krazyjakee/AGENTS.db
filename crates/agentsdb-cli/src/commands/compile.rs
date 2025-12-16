@@ -29,11 +29,32 @@ pub(crate) fn cmd_compile(
     paths: &[String],
     texts: &[String],
     kind: &str,
-    dim: u32,
+    dim: Option<u32>,
     element_type: &str,
     quant_scale: Option<f32>,
     json: bool,
 ) -> anyhow::Result<()> {
+    let resolved_dim = match dim {
+        Some(v) => v,
+        None => {
+            let out_path = Path::new(out);
+            let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
+            let siblings = standard_layer_paths_for_dir(out_dir);
+            let options = roll_up_embedding_options_from_paths(
+                Some(siblings.local.as_path()),
+                Some(siblings.user.as_path()),
+                Some(siblings.delta.as_path()),
+                Some(siblings.base.as_path()),
+            )
+            .context("roll up options")?;
+            options
+                .dim
+                .map(|v| u32::try_from(v).context("configured dim overflows u32"))
+                .transpose()?
+                .unwrap_or(128)
+        }
+    };
+
     let mut input = if let Some(input_json) = input_json {
         if !paths.is_empty() || !texts.is_empty() {
             anyhow::bail!("--in cannot be combined with PATHs or --text");
@@ -48,7 +69,7 @@ pub(crate) fn cmd_compile(
             paths,
             texts,
             kind,
-            dim,
+            resolved_dim,
             element_type,
             quant_scale,
         )?

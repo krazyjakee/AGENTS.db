@@ -15,9 +15,6 @@ const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
 const PROPOSAL_EVENT_LAYER: &str = "AGENTS.delta.db";
 
 const LOGO_PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.png"));
-const INDEX_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html"));
-const APP_CSS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.css"));
-const APP_JS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.js"));
 
 pub fn serve(root: &str, bind: &str) -> anyhow::Result<()> {
     let root = std::fs::canonicalize(root).with_context(|| format!("canonicalize root {root}"))?;
@@ -115,28 +112,69 @@ struct ChunkFull {
     removed: bool,
 }
 
+fn serve_static_file(path: &str) -> anyhow::Result<(String, Vec<u8>)> {
+    let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist");
+    let file_path = dist_dir.join(path.trim_start_matches('/'));
+
+    // Security check: ensure the path doesn't escape dist directory
+    let canonical = std::fs::canonicalize(&file_path)
+        .with_context(|| format!("file not found: {}", path))?;
+    if !canonical.starts_with(&dist_dir) {
+        anyhow::bail!("invalid path: {}", path);
+    }
+
+    let content = std::fs::read(&canonical)
+        .with_context(|| format!("read file: {}", path))?;
+
+    // Determine content type based on extension
+    let content_type = match canonical.extension().and_then(|s| s.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("woff") | Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        _ => "application/octet-stream",
+    };
+
+    Ok((content_type.to_string(), content))
+}
+
 fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyhow::Result<()> {
     let req = read_request(stream).context("read request")?;
 
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") => write_response(
-            stream,
-            200,
-            "text/html; charset=utf-8",
-            INDEX_HTML.as_bytes(),
-        )
-        .context("write index"),
-        ("GET", "/assets/app.css") => {
-            write_response(stream, 200, "text/css; charset=utf-8", APP_CSS.as_bytes())
-                .context("write app.css")
+        ("GET", "/") => {
+            match serve_static_file("index.html") {
+                Ok((content_type, body)) => {
+                    write_response(stream, 200, &content_type, &body).context("write index")
+                }
+                Err(_) => write_response(
+                    stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    b"<html><body><h1>Build frontend first</h1><p>Run: <code>cd frontend && npm install && npm run build</code></p></body></html>",
+                )
+                .context("write fallback index"),
+            }
         }
-        ("GET", "/assets/app.js") => write_response(
-            stream,
-            200,
-            "text/javascript; charset=utf-8",
-            APP_JS.as_bytes(),
-        )
-        .context("write app.js"),
+        ("GET", path) if path.starts_with("/assets/") => {
+            match serve_static_file(path) {
+                Ok((content_type, body)) => {
+                    write_response(stream, 200, &content_type, &body).context("write asset")
+                }
+                Err(err) => write_response(
+                    stream,
+                    404,
+                    "text/plain; charset=utf-8",
+                    format!("not found: {err}\n").as_bytes(),
+                )
+                .context("write 404"),
+            }
+        }
         ("GET", "/logo.png") => {
             write_response(stream, 200, "image/png", LOGO_PNG).context("write /logo.png")
         }
@@ -257,6 +295,16 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
 
             let body = serde_json::to_vec_pretty(&chunk)?;
             write_response(stream, 200, "application/json", &body).context("write /api/layer/chunk")
+        }
+        ("POST", "/api/search") => {
+            let input: SearchInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for search")?;
+            let results = {
+                let st = state.lock().expect("poisoned mutex");
+                perform_search(&st, input)?
+            };
+            let body = serde_json::to_vec_pretty(&results)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/search")
         }
         ("POST", "/api/layer/add") => {
             let input: AddInput =
@@ -636,6 +684,36 @@ fn from_hex(b: u8) -> Option<u8> {
 }
 
 #[derive(Debug, Deserialize)]
+struct SearchInput {
+    query: String,
+    layers: Vec<String>,
+    #[serde(default)]
+    k: Option<usize>,
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchOutput {
+    results: Vec<SearchResultJson>,
+    query_embedding_dim: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResultJson {
+    layer: String,
+    id: u32,
+    kind: String,
+    score: f32,
+    author: String,
+    confidence: f32,
+    created_at_unix_ms: u64,
+    content: String,
+    content_preview: String,
+    sources: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AddInput {
     path: String,
     scope: String, // local|delta
@@ -699,6 +777,97 @@ fn list_layers(root: &Path) -> anyhow::Result<Vec<ListedLayer>> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<SearchOutput> {
+    use agentsdb_ops::{search_layers, SearchConfig};
+    use agentsdb_query::LayerSet;
+
+    // Build LayerSet from input.layers
+    let mut layer_set = LayerSet {
+        base: None,
+        user: None,
+        delta: None,
+        local: None,
+    };
+    for path in &input.layers {
+        let abs_path = resolve_layer_path(&state.root, path)?;
+
+        // Determine layer type from filename
+        let layer_name = abs_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        if layer_name == "AGENTS.local.db" {
+            layer_set.local = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.user.db" {
+            layer_set.user = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.delta.db" {
+            layer_set.delta = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.db" {
+            layer_set.base = Some(abs_path.to_string_lossy().to_string());
+        } else {
+            // For custom layer names, try to infer from the path or default to base
+            layer_set.base = Some(abs_path.to_string_lossy().to_string());
+        }
+    }
+
+    // Perform search using shared operation
+    let config = SearchConfig {
+        query: Some(input.query),
+        query_vec: None,
+        k: input.k.unwrap_or(10),
+        kinds: input.kinds.unwrap_or_default(),
+        use_index: false,
+    };
+
+    let results = search_layers(&layer_set, config)?;
+
+    // Get embedding dimension from first opened layer
+    let opened = layer_set.open().context("open layers for dimension")?;
+    let query_embedding_dim = if !opened.is_empty() {
+        opened[0].1.embedding_dim()
+    } else {
+        0
+    };
+
+    // Convert results to JSON format
+    let json_results = results
+        .into_iter()
+        .map(|r| {
+            let content_preview = if r.chunk.content.len() > 200 {
+                format!("{}...", &r.chunk.content[..200])
+            } else {
+                r.chunk.content.clone()
+            };
+
+            SearchResultJson {
+                layer: format!("{:?}", r.layer),
+                id: r.chunk.id.get(),
+                kind: r.chunk.kind,
+                score: r.score,
+                author: format!("{:?}", r.chunk.author),
+                confidence: r.chunk.confidence,
+                created_at_unix_ms: r.chunk.created_at_unix_ms,
+                content: r.chunk.content,
+                content_preview,
+                sources: r.chunk.sources.into_iter().map(source_ref_to_string).collect(),
+            }
+        })
+        .collect();
+
+    Ok(SearchOutput {
+        results: json_results,
+        query_embedding_dim,
+    })
+}
+
+fn source_ref_to_string(s: agentsdb_core::types::ProvenanceRef) -> String {
+    match s {
+        agentsdb_core::types::ProvenanceRef::SourceString(s) => s,
+        agentsdb_core::types::ProvenanceRef::ChunkId(id) => format!("chunk:{}", id.get()),
+    }
 }
 
 fn resolve_layer_path(root: &Path, file_name: &str) -> anyhow::Result<PathBuf> {

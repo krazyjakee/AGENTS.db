@@ -108,9 +108,9 @@ pub(crate) enum Command {
         /// Chunk kind to assign to generated chunks.
         #[arg(long, default_value = "canonical")]
         kind: String,
-        /// Embedding dimension for the emitted schema.
-        #[arg(long, default_value_t = 128)]
-        dim: u32,
+        /// Embedding dimension for the emitted schema (defaults to configured options if present, else 128).
+        #[arg(long)]
+        dim: Option<u32>,
         /// Embedding element type: `f32` or `i8`.
         #[arg(long, default_value = "f32")]
         element_type: String,
@@ -169,7 +169,7 @@ pub(crate) enum Command {
         query_vec_file: Option<String>,
 
         /// Number of nearest neighbors to return.
-        #[arg(short, long, default_value_t = 10)]
+        #[arg(short, long, default_value_t = 5)]
         k: usize,
 
         /// Filter results by chunk kind (repeatable).

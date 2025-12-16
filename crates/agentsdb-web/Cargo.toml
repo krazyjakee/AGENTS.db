@@ -21,6 +21,7 @@ agentsdb-format = { path = "../agentsdb-format" }
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
 agentsdb-embeddings = { path = "../agentsdb-embeddings" }
 agentsdb-ops = { path = "../agentsdb-ops" }
+agentsdb-query = { path = "../agentsdb-query" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

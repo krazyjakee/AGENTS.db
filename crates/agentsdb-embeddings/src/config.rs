@@ -381,9 +381,11 @@ pub fn roll_up_embedding_options(
     }
     out.checksum_allowlist = allowlist;
 
+    let mut found_any_options = false;
     for layer_opt in layers_high_to_low {
         let Some(layer) = layer_opt else { continue };
         if let Some(patch) = last_options_patch_in_layer(layer)? {
+            found_any_options = true;
             if let Some(backend) = patch.backend {
                 out.backend = backend;
             }
@@ -416,6 +418,23 @@ pub fn roll_up_embedding_options(
             }
         }
     }
+
+    // If no options were found in any layer, fall back to base layer's embedding metadata
+    if !found_any_options && out.backend == "hash" {
+        // Check the last layer (base) for embedding metadata
+        if let Some(Some(base_layer)) = layers_high_to_low.last() {
+            if let Some(metadata_bytes) = base_layer.layer_metadata_bytes() {
+                if let Ok(metadata) = crate::layer_metadata::LayerMetadataV1::from_json_bytes(metadata_bytes) {
+                    // Use the embedding profile from the base layer
+                    out.backend = metadata.embedding_profile.backend;
+                    out.model = metadata.embedding_profile.model;
+                    out.revision = metadata.embedding_profile.revision;
+                    out.dim = Some(metadata.embedding_profile.dim);
+                }
+            }
+        }
+    }
+
     Ok(out)
 }
 

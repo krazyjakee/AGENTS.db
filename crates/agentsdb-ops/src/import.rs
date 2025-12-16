@@ -243,33 +243,32 @@ pub fn import_into_layer(
             existing_hashes.insert(hash.to_string());
         }
 
-        let embedding = match c.embedding {
-            Some(v) => v,
-            None => {
-                if embedder.is_none() {
-                    let e = embedder_for_dim(inferred_dim)?;
-                    let meta = LayerMetadataV1::new(e.profile().clone())
-                        .with_embedder_metadata(e.metadata())
-                        .with_tool(tool_name, tool_version);
-                    layer_metadata_json =
-                        Some(meta.to_json_bytes().context("serialize layer metadata")?);
-                    embedder = Some(e);
-                }
-                let e = embedder.as_ref().expect("embedder");
-                e.embed(&[content.clone()])?
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(|| vec![0.0; inferred_dim])
-            }
+        // Check if existing embedding has correct dimension
+        let needs_reembedding = match c.embedding.as_ref() {
+            Some(v) => v.len() != inferred_dim,
+            None => true,
         };
-        if embedding.len() != inferred_dim {
-            anyhow::bail!(
-                "embedding dim mismatch in import chunk id={} (got {}, expected {})",
-                c.id,
-                embedding.len(),
-                inferred_dim
-            );
-        }
+
+        let embedding = if needs_reembedding {
+            // Re-embed if dimension mismatch or no embedding
+            if embedder.is_none() {
+                let e = embedder_for_dim(inferred_dim)?;
+                let meta = LayerMetadataV1::new(e.profile().clone())
+                    .with_embedder_metadata(e.metadata())
+                    .with_tool(tool_name, tool_version);
+                layer_metadata_json =
+                    Some(meta.to_json_bytes().context("serialize layer metadata")?);
+                embedder = Some(e);
+            }
+            let e = embedder.as_ref().expect("embedder");
+            e.embed(&[content.clone()])?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| vec![0.0; inferred_dim])
+        } else {
+            // Use existing embedding if dimension matches
+            c.embedding.unwrap()
+        };
 
         let id = if exists {
             if preserve_ids {

@@ -383,27 +383,35 @@ function selectedProposalIds() {
 async function acceptProposalIds(ids) {
   if (!ids.length) { alert("No proposals selected."); return; }
   const skipExisting = confirm("Skip ids already present in the destination layer?");
-  const out = await api("/api/proposals/accept", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids, skip_existing: skipExisting }),
-  });
-  if (out && out.out_path) {
-    alert(`Wrote ${out.out_path} (base is read-only; replace AGENTS.db manually if desired).`);
+  try {
+    const out = await api("/api/proposals/accept", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids, skip_existing: skipExisting }),
+    });
+    if (out && out.out_path) {
+      alert(`Wrote ${out.out_path} (base is read-only; replace AGENTS.db manually if desired).`);
+    }
+    await refreshLayers();
+    await refreshProposals();
+  } catch (err) {
+    alert(`Failed to accept proposal(s): ${err.message || err}`);
   }
-  await refreshLayers();
-  await refreshProposals();
 }
 
 async function rejectProposalIds(ids) {
   if (!ids.length) { alert("No proposals selected."); return; }
   const reason = prompt("Reject reason (optional):") || "";
-  await api("/api/proposals/reject", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids, reason: reason.trim() || undefined }),
-  });
-  await refreshProposals();
+  try {
+    await api("/api/proposals/reject", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids, reason: reason.trim() || undefined }),
+    });
+    await refreshProposals();
+  } catch (err) {
+    alert(`Failed to reject proposal(s): ${err.message || err}`);
+  }
 }
 
 async function removeChunk(id) {

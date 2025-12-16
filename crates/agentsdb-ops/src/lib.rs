@@ -1,6 +1,7 @@
 pub mod export;
 pub mod import;
 pub mod promote;
+pub mod search;
 pub mod util;
 pub mod write;
 
@@ -8,4 +9,5 @@ pub mod write;
 pub use export::export_layer;
 pub use import::import_into_layer;
 pub use promote::promote_chunks;
+pub use search::{embed_query, search_layers, SearchConfig};
 pub use write::append_chunk;

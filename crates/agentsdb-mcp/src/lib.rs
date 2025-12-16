@@ -617,10 +617,15 @@ fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Va
         .sources
         .into_iter()
         .map(|s| match s {
-            WriteSource::String(v) => agentsdb_format::ChunkSource::SourceString(v),
-            WriteSource::ChunkId { chunk_id } => agentsdb_format::ChunkSource::ChunkId(chunk_id),
+            WriteSource::String(v) => Ok(agentsdb_format::ChunkSource::SourceString(v)),
+            WriteSource::ChunkId { chunk_id } => {
+                if chunk_id == 0 {
+                    anyhow::bail!("source chunk_id must be non-zero");
+                }
+                Ok(agentsdb_format::ChunkSource::ChunkId(chunk_id))
+            }
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let mut chunk = agentsdb_format::ChunkInput {
         id: 0,

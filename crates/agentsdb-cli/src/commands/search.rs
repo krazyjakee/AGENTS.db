@@ -1,9 +1,7 @@
 use anyhow::Context;
 
-use agentsdb_core::types::SearchFilters;
-use agentsdb_embeddings::config::roll_up_embedding_options;
-use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
-use agentsdb_query::{LayerSet, SearchOptions, SearchQuery};
+use agentsdb_ops::{search_layers, SearchConfig};
+use agentsdb_query::LayerSet;
 
 use crate::types::{SearchJson, SearchResultJson};
 use crate::util::{layer_to_str, one_line, parse_vec_json, source_to_string};
@@ -22,74 +20,42 @@ pub(crate) fn cmd_search(
     //
     // This function handles parsing query input (text, vector, or vector file), embedding the query,
     // and performing the search across specified layers with optional filtering and index usage.
-    let opened = layers.open().context("open layers")?;
-    if opened.is_empty() {
-        anyhow::bail!("no layers provided (use --base/--user/--delta/--local)");
-    }
 
-    let dim = opened[0].1.embedding_dim();
-    let mut local = None;
-    let mut user = None;
-    let mut delta = None;
-    let mut base = None;
-    for (layer_id, file) in &opened {
-        match layer_id {
-            agentsdb_core::types::LayerId::Local => local = Some(file),
-            agentsdb_core::types::LayerId::User => user = Some(file),
-            agentsdb_core::types::LayerId::Delta => delta = Some(file),
-            agentsdb_core::types::LayerId::Base => base = Some(file),
-        }
-    }
-    let options =
-        roll_up_embedding_options(&[local, user, delta, base]).context("roll up options")?;
-    if let Some(cfg_dim) = options.dim {
-        if cfg_dim != dim {
-            anyhow::bail!(
-                "embedding dim mismatch (layers are dim={dim}, options specify dim={cfg_dim})"
-            );
-        }
-    }
-    let embedder = options
-        .into_embedder(dim)
-        .context("resolve embedder from options")?;
-    let embedding = match (query, query_vec, query_vec_file) {
-        (Some(q), None, None) => {
-            if q.trim().is_empty() {
-                anyhow::bail!("--query must be non-empty");
-            }
-            for (_, file) in &opened {
-                ensure_layer_metadata_compatible_with_embedder(file, embedder.as_ref())
-                    .context("validate layer metadata vs embedder")?;
-            }
-            let out = embedder.embed(&[q])?;
-            out.into_iter().next().unwrap_or_else(|| vec![0.0; dim])
-        }
-        (None, Some(v), None) => parse_vec_json(&v)?,
-        (None, None, Some(path)) => {
+    // Parse query_vec from JSON string or file if provided
+    let query_vec_parsed = match (query_vec, query_vec_file) {
+        (Some(v), None) => Some(parse_vec_json(&v)?),
+        (None, Some(path)) => {
             let s = std::fs::read_to_string(&path).with_context(|| format!("read {path}"))?;
-            parse_vec_json(&s)?
+            Some(parse_vec_json(&s)?)
         }
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (None, Some(_), Some(_)) => {
-            anyhow::bail!("provide only one of --query, --query-vec, or --query-vec-file")
+        (Some(_), Some(_)) => {
+            anyhow::bail!("provide only one of --query-vec or --query-vec-file")
         }
-        (None, None, None) => {
-            anyhow::bail!("missing query (use --query or --query-vec/--query-vec-file)")
-        }
+        (None, None) => None,
     };
 
-    let query = SearchQuery {
-        embedding: embedding.clone(),
+    // Use shared search operation
+    let config = SearchConfig {
+        query,
+        query_vec: query_vec_parsed,
         k,
-        filters: SearchFilters { kinds },
+        kinds,
+        use_index,
     };
 
-    let results =
-        agentsdb_query::search_layers_with_options(&opened, &query, SearchOptions { use_index })
-            .context("search")?;
+    let results = search_layers(&layers, config).context("search")?;
 
     if json {
+        // Get dimension from layers for JSON output
+        let opened = layers.open().context("open layers for dimension")?;
+        let query_dim = if !opened.is_empty() {
+            opened[0].1.embedding_dim()
+        } else {
+            0
+        };
+
         let out = SearchJson {
-            query_dim: embedding.len(),
+            query_dim,
             k,
             results: results.into_iter().map(to_search_json).collect(),
         };
