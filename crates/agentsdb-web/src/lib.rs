@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use agentsdb_format::{LayerFile, SourceRef};
+use include_dir::{include_dir, Dir};
 
 const TOMBSTONE_KIND: &str = "tombstone";
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -15,6 +16,12 @@ const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
 const PROPOSAL_EVENT_LAYER: &str = "AGENTS.delta.db";
 
 const LOGO_PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.png"));
+
+// Frontend files are embedded at compile time from the dist directory.
+// The frontend MUST be built (npm run build) before compiling this crate.
+// The include_dir! macro embeds the entire dist/ folder into the binary,
+// ensuring the web UI is always available without needing the source files.
+static FRONTEND_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/dist");
 
 pub fn serve(root: &str, bind: &str) -> anyhow::Result<()> {
     let root = std::fs::canonicalize(root).with_context(|| format!("canonicalize root {root}"))?;
@@ -113,21 +120,21 @@ struct ChunkFull {
 }
 
 fn serve_static_file(path: &str) -> anyhow::Result<(String, Vec<u8>)> {
-    let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist");
-    let file_path = dist_dir.join(path.trim_start_matches('/'));
+    let path = path.trim_start_matches('/');
 
-    // Security check: ensure the path doesn't escape dist directory
-    let canonical = std::fs::canonicalize(&file_path)
-        .with_context(|| format!("file not found: {}", path))?;
-    if !canonical.starts_with(&dist_dir) {
+    // Security check: ensure the path doesn't try to escape
+    if path.contains("..") {
         anyhow::bail!("invalid path: {}", path);
     }
 
-    let content = std::fs::read(&canonical)
-        .with_context(|| format!("read file: {}", path))?;
+    let file = FRONTEND_DIST
+        .get_file(path)
+        .with_context(|| format!("file not found: {}", path))?;
+
+    let content = file.contents().to_vec();
 
     // Determine content type based on extension
-    let content_type = match canonical.extension().and_then(|s| s.to_str()) {
+    let content_type = match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
@@ -148,18 +155,8 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
 
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => {
-            match serve_static_file("index.html") {
-                Ok((content_type, body)) => {
-                    write_response(stream, 200, &content_type, &body).context("write index")
-                }
-                Err(_) => write_response(
-                    stream,
-                    200,
-                    "text/html; charset=utf-8",
-                    b"<html><body><h1>Build frontend first</h1><p>Run: <code>cd frontend && npm install && npm run build</code></p></body></html>",
-                )
-                .context("write fallback index"),
-            }
+            let (content_type, body) = serve_static_file("index.html").context("serve index.html")?;
+            write_response(stream, 200, &content_type, &body).context("write index")
         }
         ("GET", path) if path.starts_with("/assets/") => {
             match serve_static_file(path) {
@@ -1919,5 +1916,29 @@ mod tests {
         let mut st = ServerState::new(dir.path().to_path_buf());
         let states = load_proposal_states(&mut st).expect("load states");
         assert!(states.is_empty());
+    }
+
+    #[test]
+    fn frontend_is_embedded() {
+        // Verify that the frontend dist folder is embedded at compile time
+        let index_result = serve_static_file("index.html");
+        assert!(
+            index_result.is_ok(),
+            "Frontend index.html should be embedded in the binary. \
+             Error: {:?}\n\
+             This test ensures the frontend is built and embedded before distribution.",
+            index_result.err()
+        );
+
+        let (content_type, body) = index_result.expect("index.html exists");
+        assert_eq!(content_type, "text/html; charset=utf-8");
+        assert!(!body.is_empty(), "index.html should not be empty");
+
+        // Verify it's actual HTML, not the error message
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            !html.contains("Build frontend first"),
+            "Frontend should be properly built, not showing fallback error message"
+        );
     }
 }

@@ -49,6 +49,17 @@ jobs:
           npm install
           npm run build
 
+      - name: Verify frontend was built
+        run: |
+          if [ ! -f crates/agentsdb-web/dist/index.html ]; then
+            echo "ERROR: Frontend dist/index.html not found after build"
+            exit 1
+          fi
+          echo "Frontend built successfully"
+
+      - name: Test frontend embedding
+        run: cargo test -p agentsdb-web frontend_is_embedded
+
       - name: Build
         env:
           # Force dynamic C runtime on Windows to match ONNX Runtime binaries

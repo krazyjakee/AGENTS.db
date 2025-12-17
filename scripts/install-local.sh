@@ -100,7 +100,7 @@ if [[ ! -d "$crate_path" ]]; then
   exit 1
 fi
 
-# Build frontend
+# Build frontend - REQUIRED: The frontend is embedded into the binary at compile time
 frontend_path="$repo_root/crates/agentsdb-web/frontend"
 if [[ -d "$frontend_path" ]]; then
   if ! command -v npm >/dev/null 2>&1; then
@@ -108,12 +108,21 @@ if [[ -d "$frontend_path" ]]; then
     exit 1
   fi
 
-  echo "+ building frontend at $frontend_path"
+  echo "+ building frontend at $frontend_path (required for embedding)"
   (
     cd "$frontend_path"
     npm install
     npm run build
   )
+
+  # Verify the frontend was built successfully
+  dist_path="$repo_root/crates/agentsdb-web/dist/index.html"
+  if [[ ! -f "$dist_path" ]]; then
+    echo "ERROR: Frontend build failed - dist/index.html not found" >&2
+    echo "The frontend must be built before compiling the Rust binary." >&2
+    exit 1
+  fi
+  echo "+ frontend built successfully and ready for embedding"
 else
   echo "Warning: frontend directory not found at: $frontend_path" >&2
 fi
