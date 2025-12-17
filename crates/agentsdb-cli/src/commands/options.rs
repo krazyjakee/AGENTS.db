@@ -653,7 +653,7 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
     println!("Note: backends other than `hash` require rebuilding `agentsdb` with the matching Cargo feature.");
 
     let backend = prompt_line(
-        "Backend (hash|ort|candle|openai|voyage|cohere)",
+        "Backend (hash|ort|candle|openai|voyage|cohere|anthropic|bedrock|gemini)",
         Some("hash"),
     )?;
     let dim_s = prompt_line("Embedding dim", Some(&schema_dim.to_string()))?;
@@ -664,6 +664,9 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
         "openai" => Some("text-embedding-3-small"),
         "voyage" => Some("voyage-3"),
         "cohere" => Some("embed-english-v3.0"),
+        "anthropic" => Some("voyage-3"),
+        "bedrock" => Some("amazon.titan-embed-text-v1"),
+        "gemini" => Some("text-embedding-004"),
         _ => None,
     };
     let model = if model_default.is_some() {
@@ -703,6 +706,21 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
         "cohere" => {
             let base = prompt_line("API base (optional)", Some("https://api.cohere.com"))?;
             let key_env = prompt_line("API key env var", Some("COHERE_API_KEY"))?;
+            (Some(base), Some(key_env))
+        }
+        "anthropic" => {
+            let base = prompt_line("API base (optional)", Some("https://api.anthropic.com"))?;
+            let key_env = prompt_line("API key env var", Some("ANTHROPIC_API_KEY"))?;
+            (Some(base), Some(key_env))
+        }
+        "bedrock" => {
+            let base = prompt_line("API base (optional)", Some("https://bedrock-runtime.{region}.amazonaws.com"))?;
+            let key_env = prompt_line("Region env var (optional)", Some("AWS_REGION"))?;
+            (Some(base), Some(key_env))
+        }
+        "gemini" => {
+            let base = prompt_line("API base (optional)", Some("https://generativelanguage.googleapis.com"))?;
+            let key_env = prompt_line("API key env var", Some("GEMINI_API_KEY"))?;
             (Some(base), Some(key_env))
         }
         _ => (None, None),

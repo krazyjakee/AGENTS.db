@@ -15,6 +15,9 @@ ort = ["dep:fastembed", "dep:hf-hub"]
 openai = ["dep:ureq"]
 voyage = ["dep:ureq"]
 cohere = ["dep:ureq"]
+anthropic = ["dep:ureq"]
+bedrock = ["dep:ureq", "dep:hmac", "dep:sha2", "dep:hex", "dep:time"]
+gemini = ["dep:ureq"]
 
 [dependencies]
 anyhow = "1"
@@ -32,6 +35,12 @@ candle-core = { version = "0.9.1", optional = true }
 candle-nn = { version = "0.9.1", optional = true }
 candle-transformers = { version = "0.9.1", optional = true }
 tokenizers = { version = "0.21.0", optional = true }
+
+# AWS Signature V4 for Bedrock
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+time = { version = "0.3", optional = true, features = ["formatting", "macros"] }
 
 [dev-dependencies]
 tempfile = "3.10"

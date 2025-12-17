@@ -232,8 +232,71 @@ impl ResolvedEmbeddingOptions {
                     )
                 }
             }
+            "anthropic" => {
+                #[cfg(feature = "anthropic")]
+                {
+                    let model = self
+                        .model
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("anthropic backend requires model"))?;
+                    crate::backends::anthropic_embedder(
+                        dim,
+                        model,
+                        self.api_base.as_deref(),
+                        self.api_key_env.as_deref(),
+                    )?
+                }
+                #[cfg(not(feature = "anthropic"))]
+                {
+                    anyhow::bail!(
+                        "embedding backend \"anthropic\" is not enabled in this build (rebuild with cargo feature \"agentsdb-embeddings/anthropic\")"
+                    )
+                }
+            }
+            "bedrock" => {
+                #[cfg(feature = "bedrock")]
+                {
+                    let model = self
+                        .model
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("bedrock backend requires model"))?;
+                    crate::backends::bedrock_embedder(
+                        dim,
+                        model,
+                        self.api_base.as_deref(),
+                        self.api_key_env.as_deref(),
+                    )?
+                }
+                #[cfg(not(feature = "bedrock"))]
+                {
+                    anyhow::bail!(
+                        "embedding backend \"bedrock\" is not enabled in this build (rebuild with cargo feature \"agentsdb-embeddings/bedrock\")"
+                    )
+                }
+            }
+            "gemini" => {
+                #[cfg(feature = "gemini")]
+                {
+                    let model = self
+                        .model
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("gemini backend requires model"))?;
+                    crate::backends::gemini_embedder(
+                        dim,
+                        model,
+                        self.api_base.as_deref(),
+                        self.api_key_env.as_deref(),
+                    )?
+                }
+                #[cfg(not(feature = "gemini"))]
+                {
+                    anyhow::bail!(
+                        "embedding backend \"gemini\" is not enabled in this build (rebuild with cargo feature \"agentsdb-embeddings/gemini\")"
+                    )
+                }
+            }
             other => anyhow::bail!(
-                "unknown embedding backend {other:?} (supported: \"hash\", \"candle\", \"ort\", \"openai\", \"voyage\", \"cohere\")"
+                "unknown embedding backend {other:?} (supported: \"hash\", \"candle\", \"ort\", \"openai\", \"voyage\", \"cohere\", \"anthropic\", \"bedrock\", \"gemini\")"
             ),
         };
 

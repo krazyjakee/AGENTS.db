@@ -231,9 +231,11 @@ By default, `agentsdb` uses the deterministic offline `hash` embedder. Additiona
 cargo build -p agentsdb-cli --features all-embedders
 ```
 
-Backends supported when enabled: `ort`, `candle`, `openai`, `voyage`, `cohere`.
+Backends supported when enabled: `ort`, `candle`, `openai`, `voyage`, `cohere`, `anthropic`, `bedrock`, `gemini`.
 
-Remote providers read the API key from an env var (defaults: `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `COHERE_API_KEY`), configurable via `agentsdb options set --api-key-env ...`.
+Remote providers read the API key from an env var (defaults: `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `COHERE_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`), configurable via `agentsdb options set --api-key-env ...`.
+
+**Environment Variables**: See `.env.example` for a complete list of all environment variables, including API keys for embedding providers and AWS Bedrock configuration.
 
 Local model downloads can be pinned/verified:
 

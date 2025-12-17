@@ -14,7 +14,10 @@ ort = ["agentsdb-embeddings/ort"]
 openai = ["agentsdb-embeddings/openai"]
 voyage = ["agentsdb-embeddings/voyage"]
 cohere = ["agentsdb-embeddings/cohere"]
-all-embedders = ["candle", "ort", "openai", "voyage", "cohere"]
+anthropic = ["agentsdb-embeddings/anthropic"]
+bedrock = ["agentsdb-embeddings/bedrock"]
+gemini = ["agentsdb-embeddings/gemini"]
+all-embedders = ["candle", "ort", "openai", "voyage", "cohere", "anthropic", "bedrock", "gemini"]
 
 [[bin]]
 name = "agentsdb"
