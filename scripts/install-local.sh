@@ -100,6 +100,24 @@ if [[ ! -d "$crate_path" ]]; then
   exit 1
 fi
 
+# Build frontend
+frontend_path="$repo_root/crates/agentsdb-web/frontend"
+if [[ -d "$frontend_path" ]]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm not found; install Node.js first: https://nodejs.org/" >&2
+    exit 1
+  fi
+
+  echo "+ building frontend at $frontend_path"
+  (
+    cd "$frontend_path"
+    npm install
+    npm run build
+  )
+else
+  echo "Warning: frontend directory not found at: $frontend_path" >&2
+fi
+
 if [[ "$want_cargo_install" -eq 1 ]]; then
   args=(install --path "$crate_path" --locked)
   if [[ -n "$features" ]]; then
