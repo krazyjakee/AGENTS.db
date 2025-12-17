@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agentsdb-cli"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "serde",
  "thiserror 2.0.17",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-embeddings"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-format",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-format"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "memmap2",
@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-mcp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-ops"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-query"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "agentsdb-web"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "agentsdb-core",
  "agentsdb-embeddings",
