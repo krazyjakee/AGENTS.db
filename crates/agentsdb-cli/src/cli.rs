@@ -219,17 +219,20 @@ pub(crate) enum Command {
         /// Input file path (JSON or NDJSON).
         #[arg(long = "in")]
         input: String,
-        /// Target logical layer: `local`, `delta`, `user`, or `base`.
+        /// Optional target logical layer: `local`, `delta`, `user`, or `base`.
+        ///
+        /// If omitted, the import reads the export bundle and writes each exported layer into the
+        /// corresponding standard file under `--dir` (e.g. `AGENTS.delta.db`, `AGENTS.local.db`).
         #[arg(long, value_parser = ["local", "delta", "user", "base"])]
-        target: String,
-        /// Optional explicit target path (defaults to standard layer file under `--dir`).
+        target: Option<String>,
+        /// Optional explicit target path (only valid when `--target` is provided).
         #[arg(long)]
         out: Option<String>,
         /// Dry-run (parse/validate only; no writes).
         #[arg(long)]
         dry_run: bool,
         /// Dedupe by content hash (skips chunks whose `sha256(content)` already exists in target).
-        #[arg(long)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         dedupe: bool,
         /// Preserve input chunk ids when creating a new layer (errors on conflicts when appending).
         #[arg(long)]
@@ -651,7 +654,7 @@ mod tests {
                 assert_eq!(paths, vec!["README.md".to_string()]);
                 assert_eq!(texts, vec!["hello".to_string()]);
                 assert_eq!(kind, "canonical");
-                assert_eq!(dim, 128);
+                assert_eq!(dim, None);
                 assert_eq!(element_type, "f32");
                 assert_eq!(quant_scale, None);
             }

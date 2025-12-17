@@ -143,7 +143,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
         } => crate::commands::import::cmd_import(
             &dir,
             &input,
-            &target,
+            target.as_deref(),
             out.as_deref(),
             dry_run,
             dedupe,

@@ -3,7 +3,10 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 
-use agentsdb_core::export::{ExportBundleV1, ExportChunkV1, ExportNdjsonRecordV1, ExportSourceV1};
+use agentsdb_core::export::{
+    ExportBundleV1, ExportChunkV1, ExportLayerSchemaV1, ExportLayerV1, ExportNdjsonRecordV1,
+    ExportSourceV1, ExportToolInfo,
+};
 use agentsdb_embeddings::config::{
     roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
 };
@@ -18,21 +21,24 @@ pub struct ImportOutcome {
     pub dry_run: bool,
 }
 
-/// Parse import data from bytes (supports both JSON and NDJSON formats)
-fn parse_input_bytes(input: &[u8]) -> anyhow::Result<Vec<ExportChunkV1>> {
+/// Parse an export file into a structured bundle (supports both JSON and NDJSON formats).
+pub fn parse_export_bytes(input: &[u8]) -> anyhow::Result<ExportBundleV1> {
     let s = std::str::from_utf8(input).context("input must be valid UTF-8")?;
     let trimmed = s.trim_start();
     if trimmed.starts_with('{') {
-        let bundle: ExportBundleV1 = serde_json::from_str(trimmed).context("parse JSON export")?;
-        let mut out = Vec::new();
-        for l in bundle.layers {
-            out.extend(l.chunks);
+        if let Ok(bundle) = serde_json::from_str::<ExportBundleV1>(trimmed) {
+            return Ok(bundle);
         }
-        return Ok(out);
     }
 
     // NDJSON
-    let mut chunks = Vec::new();
+    let mut tool = ExportToolInfo {
+        name: "unknown".to_string(),
+        version: "unknown".to_string(),
+    };
+    let mut layers: Vec<ExportLayerV1> = Vec::new();
+    let mut layer_ix_by_path: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
     for (i, line) in s.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
@@ -40,11 +46,77 @@ fn parse_input_bytes(input: &[u8]) -> anyhow::Result<Vec<ExportChunkV1>> {
         }
         let rec: ExportNdjsonRecordV1 =
             serde_json::from_str(line).with_context(|| format!("parse NDJSON line {}", i + 1))?;
-        if let ExportNdjsonRecordV1::Chunk { chunk, .. } = rec {
-            chunks.push(chunk);
+        match rec {
+            ExportNdjsonRecordV1::Header { tool: t, .. } => tool = t,
+            ExportNdjsonRecordV1::Layer {
+                path,
+                layer,
+                schema,
+                layer_metadata_json,
+            } => {
+                let ix = if let Some(ix) = layer_ix_by_path.get(&path).copied() {
+                    ix
+                } else {
+                    let ix = layers.len();
+                    layers.push(ExportLayerV1 {
+                        path: path.clone(),
+                        layer: None,
+                        schema: ExportLayerSchemaV1 {
+                            dim: 0,
+                            element_type: "f32".to_string(),
+                            quant_scale: 1.0,
+                        },
+                        layer_metadata_json: None,
+                        chunks: Vec::new(),
+                    });
+                    layer_ix_by_path.insert(path.clone(), ix);
+                    ix
+                };
+                let l = layers.get_mut(ix).expect("layer index");
+                l.layer = layer;
+                l.schema = schema;
+                l.layer_metadata_json = layer_metadata_json;
+            }
+            ExportNdjsonRecordV1::Chunk { layer_path, chunk } => {
+                let ix = if let Some(ix) = layer_ix_by_path.get(&layer_path).copied() {
+                    ix
+                } else {
+                    let ix = layers.len();
+                    layers.push(ExportLayerV1 {
+                        path: layer_path.clone(),
+                        layer: None,
+                        schema: ExportLayerSchemaV1 {
+                            dim: 0,
+                            element_type: "f32".to_string(),
+                            quant_scale: 1.0,
+                        },
+                        layer_metadata_json: None,
+                        chunks: Vec::new(),
+                    });
+                    layer_ix_by_path.insert(layer_path.clone(), ix);
+                    ix
+                };
+                let l = layers.get_mut(ix).expect("layer index");
+                l.chunks.push(chunk);
+            }
         }
     }
-    Ok(chunks)
+
+    Ok(ExportBundleV1 {
+        format: "agentsdb.export.ndjson.v1".to_string(),
+        tool,
+        layers,
+    })
+}
+
+/// Parse import data from bytes (supports both JSON and NDJSON formats)
+fn parse_input_bytes(input: &[u8]) -> anyhow::Result<Vec<ExportChunkV1>> {
+    let bundle = parse_export_bytes(input)?;
+    let mut out = Vec::new();
+    for l in bundle.layers {
+        out.extend(l.chunks);
+    }
+    Ok(out)
 }
 
 /// Parse import data from string (supports both JSON and NDJSON formats)
@@ -367,4 +439,196 @@ pub fn import_into_layer(
         skipped,
         dry_run: false,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn import_export_bundle_into_dir(
+    dir: &Path,
+    data: &[u8],
+    dry_run: bool,
+    dedupe: bool,
+    preserve_ids: bool,
+    allow_base: bool,
+    dim: Option<u32>,
+    tool_name: &str,
+    tool_version: &str,
+) -> anyhow::Result<Vec<(String, ImportOutcome)>> {
+    let bundle = parse_export_bytes(data).context("parse export")?;
+    let mut out = Vec::new();
+
+    for layer in bundle.layers {
+        let rel = std::path::Path::new(&layer.path);
+        if rel.components().count() != 1 {
+            anyhow::bail!(
+                "export layer path {:?} must be a simple file name (no directories)",
+                layer.path
+            );
+        }
+        let file_name = rel
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+
+        let scope = crate::util::logical_layer_for_path(file_name).with_context(|| {
+            format!(
+                "unsupported export layer path {:?} (expected AGENTS.db / AGENTS.user.db / AGENTS.delta.db / AGENTS.local.db)",
+                layer.path
+            )
+        })?;
+
+        if scope == "base" && !allow_base {
+            anyhow::bail!(
+                "export includes AGENTS.db; pass --allow-base to import it, or export without base"
+            );
+        }
+
+        let abs_path = dir.join(file_name);
+
+        let single = ExportBundleV1 {
+            format: "agentsdb.export.v1".to_string(),
+            tool: ExportToolInfo {
+                name: tool_name.to_string(),
+                version: tool_version.to_string(),
+            },
+            layers: vec![layer],
+        };
+        let data = serde_json::to_string(&single).context("serialize layer bundle")?;
+
+        let outcome = import_into_layer(
+            &abs_path,
+            scope,
+            &data,
+            dry_run,
+            dedupe,
+            preserve_ids,
+            allow_base,
+            dim,
+            tool_name,
+            tool_version,
+        )?;
+
+        out.push((abs_path.to_string_lossy().to_string(), outcome));
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_chunk(id: u32, content: &str) -> ExportChunkV1 {
+        ExportChunkV1 {
+            id,
+            kind: "test".to_string(),
+            content: Some(content.to_string()),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 1,
+            sources: Vec::new(),
+            embedding: Some(vec![0.0, 0.0, 0.0, 0.0]),
+            content_sha256: None,
+        }
+    }
+
+    #[test]
+    fn parse_export_bytes_json_preserves_layers() {
+        let bundle = ExportBundleV1 {
+            format: "agentsdb.export.v1".to_string(),
+            tool: ExportToolInfo {
+                name: "test".to_string(),
+                version: "0".to_string(),
+            },
+            layers: vec![
+                ExportLayerV1 {
+                    path: "AGENTS.delta.db".to_string(),
+                    layer: Some("delta".to_string()),
+                    schema: ExportLayerSchemaV1 {
+                        dim: 4,
+                        element_type: "f32".to_string(),
+                        quant_scale: 1.0,
+                    },
+                    layer_metadata_json: None,
+                    chunks: vec![minimal_chunk(1, "a")],
+                },
+                ExportLayerV1 {
+                    path: "AGENTS.local.db".to_string(),
+                    layer: Some("local".to_string()),
+                    schema: ExportLayerSchemaV1 {
+                        dim: 4,
+                        element_type: "f32".to_string(),
+                        quant_scale: 1.0,
+                    },
+                    layer_metadata_json: None,
+                    chunks: vec![minimal_chunk(2, "b")],
+                },
+            ],
+        };
+
+        let bytes = serde_json::to_vec(&bundle).unwrap();
+        let parsed = parse_export_bytes(&bytes).unwrap();
+        assert_eq!(parsed.layers.len(), 2);
+        assert_eq!(parsed.layers[0].path, "AGENTS.delta.db");
+        assert_eq!(parsed.layers[1].path, "AGENTS.local.db");
+        assert_eq!(parsed.layers[0].chunks.len(), 1);
+        assert_eq!(parsed.layers[1].chunks.len(), 1);
+    }
+
+    #[test]
+    fn parse_export_bytes_ndjson_groups_chunks_by_layer() {
+        let header = ExportNdjsonRecordV1::Header {
+            format: "agentsdb.export.ndjson.v1".to_string(),
+            tool: ExportToolInfo {
+                name: "test".to_string(),
+                version: "0".to_string(),
+            },
+        };
+        let layer_delta = ExportNdjsonRecordV1::Layer {
+            path: "AGENTS.delta.db".to_string(),
+            layer: Some("delta".to_string()),
+            schema: ExportLayerSchemaV1 {
+                dim: 4,
+                element_type: "f32".to_string(),
+                quant_scale: 1.0,
+            },
+            layer_metadata_json: None,
+        };
+        let layer_local = ExportNdjsonRecordV1::Layer {
+            path: "AGENTS.local.db".to_string(),
+            layer: Some("local".to_string()),
+            schema: ExportLayerSchemaV1 {
+                dim: 4,
+                element_type: "f32".to_string(),
+                quant_scale: 1.0,
+            },
+            layer_metadata_json: None,
+        };
+        let chunk_delta = ExportNdjsonRecordV1::Chunk {
+            layer_path: "AGENTS.delta.db".to_string(),
+            chunk: minimal_chunk(1, "a"),
+        };
+        let chunk_local = ExportNdjsonRecordV1::Chunk {
+            layer_path: "AGENTS.local.db".to_string(),
+            chunk: minimal_chunk(2, "b"),
+        };
+
+        let ndjson = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            serde_json::to_string(&header).unwrap(),
+            serde_json::to_string(&layer_delta).unwrap(),
+            serde_json::to_string(&layer_local).unwrap(),
+            serde_json::to_string(&chunk_delta).unwrap(),
+            serde_json::to_string(&chunk_local).unwrap(),
+        );
+
+        let parsed = parse_export_bytes(ndjson.as_bytes()).unwrap();
+        assert_eq!(parsed.layers.len(), 2);
+
+        let mut by_path: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for l in &parsed.layers {
+            by_path.insert(l.path.clone(), l.chunks.len());
+        }
+        assert_eq!(by_path.get("AGENTS.delta.db").copied().unwrap_or_default(), 1);
+        assert_eq!(by_path.get("AGENTS.local.db").copied().unwrap_or_default(), 1);
+    }
 }

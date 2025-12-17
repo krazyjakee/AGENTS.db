@@ -153,13 +153,13 @@ agentsdb export --dir . --format json --layers base,user,delta,local --out agent
 Import an export file into a writable layer (append-only):
 
 ```sh
-agentsdb import --dir . --in agentsdb-export.json --target delta --dedupe
+agentsdb import --dir . --in agentsdb-export.json --dedupe
 ```
 
 Dangerous escape hatch (writes to `AGENTS.db`):
 
 ```sh
-agentsdb import --dir . --in agentsdb-export.json --target base --allow-base
+agentsdb import --dir . --in agentsdb-export.json --allow-base
 ```
 
 See `docs/Export.md` for the schema and details.

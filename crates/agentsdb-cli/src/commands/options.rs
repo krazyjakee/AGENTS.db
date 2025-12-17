@@ -637,7 +637,7 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
     let dir = Path::new(dir);
 
     let standard = standard_layer_paths_for_dir(dir);
-    let schema_dim = [
+    let existing_schema_dim = [
         standard.local.as_path(),
         standard.delta.as_path(),
         standard.user.as_path(),
@@ -646,16 +646,20 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
     .into_iter()
     .find(|p| p.exists())
     .and_then(|p| agentsdb_format::LayerFile::open(p).ok())
-    .map(|f| agentsdb_format::schema_of(&f).dim)
-    .unwrap_or(128);
+    .map(|f| agentsdb_format::schema_of(&f).dim);
 
     println!("Embedding options wizard (writes an `options` record; layers remain append-only).");
     println!("Note: backends other than `hash` require rebuilding `agentsdb` with the matching Cargo feature.");
 
     let backend = prompt_line(
         "Backend (hash|ort|candle|openai|voyage|cohere|anthropic|bedrock|gemini)",
-        Some("hash"),
+        Some("candle"),
     )?;
+
+    let schema_dim = existing_schema_dim.unwrap_or(match backend.as_str() {
+        "hash" => 128,
+        _ => 384,
+    });
     let dim_s = prompt_line("Embedding dim", Some(&schema_dim.to_string()))?;
     let dim: u32 = dim_s.parse().context("parse dim")?;
 
