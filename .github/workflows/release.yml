@@ -50,6 +50,7 @@ jobs:
           npm run build
 
       - name: Verify frontend was built
+        shell: bash
         run: |
           if [ ! -f crates/agentsdb-web/dist/index.html ]; then
             echo "ERROR: Frontend dist/index.html not found after build"
