@@ -3,9 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use agentsdb_embeddings::config::{
-    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
-};
+use agentsdb_embeddings::config::get_immutable_embedding_options;
 use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
@@ -39,14 +37,8 @@ pub(crate) fn cmd_compile(
         None => {
             let out_path = Path::new(out);
             let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
-            let siblings = standard_layer_paths_for_dir(out_dir);
-            let options = roll_up_embedding_options_from_paths(
-                Some(siblings.local.as_path()),
-                Some(siblings.user.as_path()),
-                Some(siblings.delta.as_path()),
-                Some(siblings.base.as_path()),
-            )
-            .context("roll up options")?;
+            let options = get_immutable_embedding_options(out_dir)
+                .context("get immutable embedding options")?;
             options
                 .dim
                 .map(|v| u32::try_from(v).context("configured dim overflows u32"))
@@ -224,14 +216,8 @@ pub(crate) fn compile_to_layer(
 
     let out_path = Path::new(out);
     let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
-    let siblings = standard_layer_paths_for_dir(out_dir);
-    let options = roll_up_embedding_options_from_paths(
-        Some(siblings.local.as_path()),
-        Some(siblings.user.as_path()),
-        Some(siblings.delta.as_path()),
-        Some(siblings.base.as_path()),
-    )
-    .context("roll up options")?;
+    let options = get_immutable_embedding_options(out_dir)
+        .context("get immutable embedding options")?;
     if let Some(cfg_dim) = options.dim {
         if cfg_dim != dim {
             anyhow::bail!(
@@ -329,7 +315,7 @@ pub(crate) fn compile_to_layer(
         }
         LayerWriteAction::Appended
     } else {
-        agentsdb_format::write_layer_atomic(out_path, &schema, &chunks, Some(&layer_metadata_json))
+        agentsdb_format::write_layer_atomic(out_path, &schema, &mut chunks, Some(&layer_metadata_json))
             .context("write layer")?;
         if existed && replace {
             LayerWriteAction::Replaced

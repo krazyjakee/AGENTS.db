@@ -325,14 +325,25 @@ fn write_allowlist_record(
 ) -> anyhow::Result<()> {
     let paths = resolve_paths(dir, None, None, None, None);
 
-    let (target_path, allow_user) = match scope {
-        "local" => (paths.local, false),
-        "delta" => (paths.delta, false),
-        "user" => (paths.user, true),
-        other => anyhow::bail!("--scope must be 'local', 'user', or 'delta' (got {other:?})"),
+    // Only AGENTS.db (base layer) should store options documents.
+    // This ensures all operations use the same immutable embedding configuration.
+    if scope != "base" {
+        anyhow::bail!(
+            "allowlist options can only be set on base layer (AGENTS.db); got --scope {scope:?}\n\
+             Embedding options must be immutable and stored only in AGENTS.db to ensure consistency.\n\
+             Use: agentsdb options allowlist ... --scope base"
+        );
+    }
+
+    let (target_path, allow_user, allow_base) = match scope {
+        "base" => (paths.base.clone(), false, true),
+        other => anyhow::bail!("--scope must be 'base' (got {other:?})"),
     };
 
-    if allow_user {
+    if allow_base {
+        agentsdb_format::ensure_writable_layer_path_allow_base(&target_path)
+            .context("permission check")?;
+    } else if allow_user {
         agentsdb_format::ensure_writable_layer_path_allow_user(&target_path)
             .context("permission check")?;
     } else {
@@ -383,7 +394,8 @@ fn write_allowlist_record(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        agentsdb_format::write_layer_atomic(&target_path, &schema, &[chunk], None)
+        let mut chunks = [chunk];
+        agentsdb_format::write_layer_atomic(&target_path, &schema, &mut chunks, None)
             .context("write")?;
         ("created", chunk_id)
     };
@@ -501,14 +513,25 @@ pub(crate) fn cmd_options_set(
         anyhow::bail!("no fields provided (use one or more of --backend/--model/--revision/--model-path/--model-sha256/--dim/--api-base/--api-key-env/--cache/--cache-dir)");
     }
 
-    let (target_path, allow_user) = match scope {
-        "local" => (paths.local, false),
-        "delta" => (paths.delta, false),
-        "user" => (paths.user, true),
-        other => anyhow::bail!("--scope must be 'local', 'user', or 'delta' (got {other:?})"),
+    // Only AGENTS.db (base layer) should store options documents.
+    // This ensures all operations use the same immutable embedding configuration.
+    if scope != "base" {
+        anyhow::bail!(
+            "options can only be set on base layer (AGENTS.db); got --scope {scope:?}\n\
+             Embedding options must be immutable and stored only in AGENTS.db to ensure consistency.\n\
+             Use: agentsdb options set --scope base ..."
+        );
+    }
+
+    let (target_path, allow_user, allow_base) = match scope {
+        "base" => (paths.base.clone(), false, true),
+        other => anyhow::bail!("--scope must be 'base' (got {other:?})"),
     };
 
-    if allow_user {
+    if allow_base {
+        agentsdb_format::ensure_writable_layer_path_allow_base(&target_path)
+            .context("permission check")?;
+    } else if allow_user {
         agentsdb_format::ensure_writable_layer_path_allow_user(&target_path)
             .context("permission check")?;
     } else {
@@ -580,7 +603,8 @@ pub(crate) fn cmd_options_set(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        agentsdb_format::write_layer_atomic(&target_path, &schema, &[chunk], None)
+        let mut chunks = [chunk];
+        agentsdb_format::write_layer_atomic(&target_path, &schema, &mut chunks, None)
             .context("write")?;
         ("created", chunk_id)
     };
@@ -630,25 +654,19 @@ fn prompt_line(label: &str, default: Option<&str>) -> anyhow::Result<String> {
     }
 }
 
-pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::Result<()> {
+pub(crate) fn cmd_options_wizard(dir: &str, json: bool) -> anyhow::Result<()> {
     if json {
         anyhow::bail!("--json is not supported for options wizard");
     }
     let dir = Path::new(dir);
 
     let standard = standard_layer_paths_for_dir(dir);
-    let existing_schema_dim = [
-        standard.local.as_path(),
-        standard.delta.as_path(),
-        standard.user.as_path(),
-        standard.base.as_path(),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .and_then(|p| agentsdb_format::LayerFile::open(p).ok())
-    .map(|f| agentsdb_format::schema_of(&f).dim);
+    let existing_schema_dim = standard.base.exists()
+        .then(|| agentsdb_format::LayerFile::open(&standard.base).ok())
+        .flatten()
+        .map(|f| agentsdb_format::schema_of(&f).dim);
 
-    println!("Embedding options wizard (writes an `options` record; layers remain append-only).");
+    println!("Embedding options wizard (stores immutable options in AGENTS.db).");
     println!("Note: backends other than `hash` require rebuilding `agentsdb` with the matching Cargo feature.");
 
     let backend = prompt_line(
@@ -742,9 +760,10 @@ pub(crate) fn cmd_options_wizard(dir: &str, scope: &str, json: bool) -> anyhow::
         None
     };
 
+    // Always write to base layer (AGENTS.db) for immutable embedding configuration
     cmd_options_set(
         dir.to_string_lossy().as_ref(),
-        scope,
+        "base",
         Some(backend.as_str()),
         model.as_deref(),
         None,

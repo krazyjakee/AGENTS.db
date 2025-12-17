@@ -87,6 +87,7 @@ struct LayerMeta {
     file_length_bytes: u64,
     embedding_dim: usize,
     embedding_element_type: String,
+    embedding_backend: Option<String>,
     relationship_count: Option<u64>,
     kinds: BTreeMap<String, u64>,
     removed_count: u64,
@@ -780,35 +781,41 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
     use agentsdb_ops::{search_layers, SearchConfig};
     use agentsdb_query::LayerSet;
 
-    // Build LayerSet from input.layers
-    let mut layer_set = LayerSet {
-        base: None,
-        user: None,
-        delta: None,
-        local: None,
-    };
-    for path in &input.layers {
-        let abs_path = resolve_layer_path(&state.root, path)?;
+    // Build LayerSet from input.layers, or auto-discover if empty
+    let layer_set = if input.layers.is_empty() {
+        // Auto-discover standard layers in the root directory
+        discover_standard_layers_in_root(&state.root)
+    } else {
+        let mut layer_set = LayerSet {
+            base: None,
+            user: None,
+            delta: None,
+            local: None,
+        };
+        for path in &input.layers {
+            let abs_path = resolve_layer_path(&state.root, path)?;
 
-        // Determine layer type from filename
-        let layer_name = abs_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+            // Determine layer type from filename
+            let layer_name = abs_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
 
-        if layer_name == "AGENTS.local.db" {
-            layer_set.local = Some(abs_path.to_string_lossy().to_string());
-        } else if layer_name == "AGENTS.user.db" {
-            layer_set.user = Some(abs_path.to_string_lossy().to_string());
-        } else if layer_name == "AGENTS.delta.db" {
-            layer_set.delta = Some(abs_path.to_string_lossy().to_string());
-        } else if layer_name == "AGENTS.db" {
-            layer_set.base = Some(abs_path.to_string_lossy().to_string());
-        } else {
-            // For custom layer names, try to infer from the path or default to base
-            layer_set.base = Some(abs_path.to_string_lossy().to_string());
+            if layer_name == "AGENTS.local.db" {
+                layer_set.local = Some(abs_path.to_string_lossy().to_string());
+            } else if layer_name == "AGENTS.user.db" {
+                layer_set.user = Some(abs_path.to_string_lossy().to_string());
+            } else if layer_name == "AGENTS.delta.db" {
+                layer_set.delta = Some(abs_path.to_string_lossy().to_string());
+            } else if layer_name == "AGENTS.db" {
+                layer_set.base = Some(abs_path.to_string_lossy().to_string());
+            } else {
+                // For custom layer names, try to infer from the path or default to base
+                layer_set.base = Some(abs_path.to_string_lossy().to_string());
+            }
         }
-    }
+        layer_set
+    };
 
     // Perform search using shared operation
     let config = SearchConfig {
@@ -840,7 +847,7 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
             };
 
             SearchResultJson {
-                layer: format!("{:?}", r.layer),
+                layer: layer_id_to_filename(r.layer).to_string(),
                 id: r.chunk.id.get(),
                 kind: r.chunk.kind,
                 score: r.score,
@@ -864,6 +871,54 @@ fn source_ref_to_string(s: agentsdb_core::types::ProvenanceRef) -> String {
     match s {
         agentsdb_core::types::ProvenanceRef::SourceString(s) => s,
         agentsdb_core::types::ProvenanceRef::ChunkId(id) => format!("chunk:{}", id.get()),
+    }
+}
+
+fn layer_id_to_filename(layer: agentsdb_core::types::LayerId) -> &'static str {
+    use agentsdb_core::types::LayerId;
+    match layer {
+        LayerId::Local => "AGENTS.local.db",
+        LayerId::User => "AGENTS.user.db",
+        LayerId::Delta => "AGENTS.delta.db",
+        LayerId::Base => "AGENTS.db",
+    }
+}
+
+fn discover_standard_layers_in_root(root: &Path) -> agentsdb_query::LayerSet {
+    use agentsdb_query::LayerSet;
+
+    // Standard layer filenames to look for in the root directory
+    let standard_filenames = [
+        ("AGENTS.db", "base"),
+        ("AGENTS.user.db", "user"),
+        ("AGENTS.delta.db", "delta"),
+        ("AGENTS.local.db", "local"),
+    ];
+
+    let mut base = None;
+    let mut user = None;
+    let mut delta = None;
+    let mut local = None;
+
+    for (filename, layer_type) in standard_filenames {
+        let path = root.join(filename);
+        if path.exists() {
+            let path_str = path.to_string_lossy().to_string();
+            match layer_type {
+                "base" => base = Some(path_str),
+                "user" => user = Some(path_str),
+                "delta" => delta = Some(path_str),
+                "local" => local = Some(path_str),
+                _ => {}
+            }
+        }
+    }
+
+    LayerSet {
+        base,
+        user,
+        delta,
+        local,
     }
 }
 
@@ -975,12 +1030,61 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
     } else {
         (conf_sum / (conf_n as f64)) as f32
     };
+
+    // Extract embedding backend from layer metadata, or fall back to options chunks
+    let embedding_backend = file.layer_metadata_bytes()
+        .and_then(|bytes| agentsdb_embeddings::layer_metadata::LayerMetadataV1::from_json_bytes(bytes).ok())
+        .map(|metadata| metadata.embedding_profile.backend)
+        .or_else(|| {
+            // Fallback: read last options chunk in this layer
+            file.chunks()
+                .filter_map(|c| c.ok())
+                .filter(|c| c.kind == "options")
+                .last()
+                .and_then(|c| {
+                    serde_json::from_str::<serde_json::Value>(c.content)
+                        .ok()
+                        .and_then(|v| v.get("embedding")?.get("backend")?.as_str().map(|s| s.to_string()))
+                })
+        })
+        .or_else(|| {
+            // Final fallback: read from base layer (AGENTS.db) in the same directory
+            // Only try if current layer is not already AGENTS.db
+            let file_name = abs_path.file_name()?.to_str()?;
+            if file_name != "AGENTS.db" {
+                let base_path = abs_path.parent()?.join("AGENTS.db");
+                if base_path.exists() {
+                    if let Ok(base_file) = LayerFile::open(&base_path) {
+                        // Try layer metadata first
+                        if let Some(backend) = base_file.layer_metadata_bytes()
+                            .and_then(|bytes| agentsdb_embeddings::layer_metadata::LayerMetadataV1::from_json_bytes(bytes).ok())
+                            .map(|metadata| metadata.embedding_profile.backend)
+                        {
+                            return Some(backend);
+                        }
+                        // Then try options chunk
+                        return base_file.chunks()
+                            .filter_map(|c| c.ok())
+                            .filter(|c| c.kind == "options")
+                            .last()
+                            .and_then(|c| {
+                                serde_json::from_str::<serde_json::Value>(c.content)
+                                    .ok()
+                                    .and_then(|v| v.get("embedding")?.get("backend")?.as_str().map(|s| s.to_string()))
+                            });
+                    }
+                }
+            }
+            None
+        });
+
     let meta = LayerMeta {
         path: path_label,
         chunk_count: file.chunk_count,
         file_length_bytes: file.header.file_length_bytes,
         embedding_dim: file.embedding_dim(),
         embedding_element_type: format!("{:?}", file.embedding_matrix.element_type).to_lowercase(),
+        embedding_backend,
         relationship_count: file.relationship_count,
         kinds,
         removed_count: removed_ids.len() as u64,
@@ -1817,7 +1921,7 @@ fn promote_delta_to_base_new(
     let out_path = st.root.join("AGENTS.db.new");
     let mut chunks: Vec<agentsdb_format::ChunkInput> = by_id.into_values().collect();
     chunks.sort_by_key(|c| c.id);
-    agentsdb_format::write_layer_atomic(&out_path, &base_schema, &chunks, base_metadata.as_deref())
+    agentsdb_format::write_layer_atomic(&out_path, &base_schema, &mut chunks, base_metadata.as_deref())
         .context("write AGENTS.db.new")?;
 
     Ok(PromoteOut {
@@ -1860,7 +1964,8 @@ mod tests {
             embedding: vec![0.0; dim as usize],
             sources: Vec::new(),
         };
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&metadata))
+        let mut chunks = [chunk];
+        agentsdb_format::write_layer_atomic(path, &schema, &mut chunks, Some(&metadata))
             .expect("write layer");
     }
 
@@ -1902,7 +2007,10 @@ mod tests {
 
         let mut st = ServerState::new(root.to_path_buf());
         let out = promote_delta_to_user(&mut st, &[9], false).expect("promote");
-        assert_eq!(out.promoted, vec![9]);
+
+        // Promoted chunks receive new auto-assigned IDs (not the original ID 9)
+        assert_eq!(out.promoted.len(), 1, "should have promoted one chunk");
+        assert!(out.promoted[0] > 0, "promoted chunk should have valid ID");
         assert!(root.join("AGENTS.user.db").exists());
     }
 
@@ -1935,6 +2043,120 @@ mod tests {
         assert!(
             !html.contains("Build frontend first"),
             "Frontend should be properly built, not showing fallback error message"
+        );
+    }
+
+    #[test]
+    fn remove_chunk_from_local_with_local_scope_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.local.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
+
+        // Add a chunk to remove
+        let chunk_id = append_chunk(&path, "local", None, "note", "test chunk", 1.0, None, &[], &[])
+            .expect("append chunk");
+
+        // Remove the chunk with correct scope
+        let tombstone_id = append_chunk(
+            &path,
+            "local",
+            None,
+            TOMBSTONE_KIND,
+            &format!("retract chunk id {}", chunk_id),
+            1.0,
+            None,
+            &[],
+            &[chunk_id],
+        )
+        .expect("remove should succeed with correct scope");
+
+        assert!(tombstone_id > 0, "tombstone should have valid ID");
+    }
+
+    #[test]
+    fn remove_chunk_from_delta_with_delta_scope_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.delta.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
+
+        // Add a chunk to remove
+        let chunk_id = append_chunk(&path, "delta", None, "note", "test chunk", 1.0, None, &[], &[])
+            .expect("append chunk");
+
+        // Remove the chunk with correct scope
+        let tombstone_id = append_chunk(
+            &path,
+            "delta",
+            None,
+            TOMBSTONE_KIND,
+            &format!("retract chunk id {}", chunk_id),
+            1.0,
+            None,
+            &[],
+            &[chunk_id],
+        )
+        .expect("remove should succeed with correct scope");
+
+        assert!(tombstone_id > 0, "tombstone should have valid ID");
+    }
+
+    #[test]
+    fn remove_chunk_from_local_with_delta_scope_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.local.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
+
+        // Add a chunk
+        let chunk_id = append_chunk(&path, "local", None, "note", "test chunk", 1.0, None, &[], &[])
+            .expect("append chunk");
+
+        // Try to remove with wrong scope (this is the bug we're catching!)
+        let err = append_chunk(
+            &path,
+            "delta", // Wrong scope for AGENTS.local.db
+            None,
+            TOMBSTONE_KIND,
+            &format!("retract chunk id {}", chunk_id),
+            1.0,
+            None,
+            &[],
+            &[chunk_id],
+        )
+        .expect_err("remove should fail with wrong scope");
+
+        assert!(
+            err.to_string().contains("scope delta only allowed for AGENTS.delta.db"),
+            "Expected scope validation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn remove_chunk_from_delta_with_local_scope_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.delta.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
+
+        // Add a chunk
+        let chunk_id = append_chunk(&path, "delta", None, "note", "test chunk", 1.0, None, &[], &[])
+            .expect("append chunk");
+
+        // Try to remove with wrong scope
+        let err = append_chunk(
+            &path,
+            "local", // Wrong scope for AGENTS.delta.db
+            None,
+            TOMBSTONE_KIND,
+            &format!("retract chunk id {}", chunk_id),
+            1.0,
+            None,
+            &[],
+            &[chunk_id],
+        )
+        .expect_err("remove should fail with wrong scope");
+
+        assert!(
+            err.to_string().contains("scope local only allowed for AGENTS.local.db"),
+            "Expected scope validation error, got: {err}"
         );
     }
 }

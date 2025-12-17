@@ -8,6 +8,8 @@ import { EditChunkModal } from './components/EditChunkModal';
 import { ProposalsPanel } from './components/ProposalsPanel';
 import { ProposalDetailsModal } from './components/ProposalDetailsModal';
 import { ExportImportPanel } from './components/ExportImportPanel';
+import { PromoteModal } from './components/PromoteModal';
+import { ProposeModal } from './components/ProposeModal';
 import type {
   ListedLayer,
   LayerMeta,
@@ -16,8 +18,10 @@ import type {
   ChunkFull,
   AddChunkRequest,
   ImportRequest,
+  ProposeRequest,
 } from './types';
 import { api } from './api';
+import { writeScopeForPath } from './utils/helpers';
 
 // Custom hook for error handling in async operations
 function useErrorHandler(setError: (error: string | null) => void) {
@@ -56,6 +60,8 @@ export function App() {
   // UI state
   const [viewingChunk, setViewingChunk] = useState<ChunkFull | null>(null);
   const [editingChunk, setEditingChunk] = useState<ChunkFull | null>(null);
+  const [promotingChunk, setPromotingChunk] = useState<ChunkFull | null>(null);
+  const [proposingChunk, setProposingChunk] = useState<ChunkFull | null>(null);
   const [viewingProposal, setViewingProposal] = useState<ProposalRow | null>(null);
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [showExportImport, setShowExportImport] = useState(false);
@@ -124,14 +130,18 @@ export function App() {
   // Event handlers
   const handleViewChunk = async (chunk: ChunkSummary) => {
     await withErrorHandling(async () => {
-      const full = await api.getChunk(selectedLayer, chunk.id);
+      // Use chunk's layer if available (from search results), otherwise use selected layer
+      const layerToUse = chunk.layer || selectedLayer;
+      const full = await api.getChunk(layerToUse, chunk.id);
       setViewingChunk(full);
     });
   };
 
   const handleEditChunk = async (chunk: ChunkSummary) => {
     await withErrorHandling(async () => {
-      const full = await api.getChunk(selectedLayer, chunk.id);
+      // Use chunk's layer if available (from search results), otherwise use selected layer
+      const layerToUse = chunk.layer || selectedLayer;
+      const full = await api.getChunk(layerToUse, chunk.id);
       setEditingChunk(full);
       setViewingChunk(null);
     });
@@ -144,9 +154,11 @@ export function App() {
     if (!confirmed) return;
 
     await withErrorHandling(async () => {
+      // Use chunk's layer if available (from search results), otherwise use selected layer
+      const layerToUse = chunk.layer || selectedLayer;
       await api.removeChunk({
-        path: selectedLayer,
-        scope: 'delta',
+        path: layerToUse,
+        scope: writeScopeForPath(layerToUse),
         id: chunk.id,
       });
       await loadChunks();
@@ -177,49 +189,40 @@ export function App() {
     }
   };
 
-  const handlePropose = async (chunk: ChunkFull) => {
-    const title = prompt('Proposal title:');
-    if (!title) return;
+  const handlePropose = (chunk: ChunkFull) => {
+    setViewingChunk(null);
+    setProposingChunk(chunk);
+  };
 
-    const why = prompt('Why should this be promoted?');
-    const what = prompt('What does this chunk contain?');
-
+  const handleProposeSubmit = async (request: ProposeRequest) => {
     try {
-      await api.propose({
-        context_id: chunk.id,
-        from_path: selectedLayer,
-        to_path: selectedLayer.replace('.delta.db', '.user.db'),
-        title,
-        why: why || undefined,
-        what: what || undefined,
-        where: `${selectedLayer} chunk ${chunk.id}`,
-      });
+      await api.propose(request);
       await refreshProposals();
-      setViewingChunk(null);
+      setProposingChunk(null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      throw err;
     }
   };
 
-  const handlePromote = async (chunk: ChunkFull) => {
-    const toPath = prompt(
-      'Target path for promotion:',
-      selectedLayer.replace('.delta.db', '.user.db')
-    );
-    if (!toPath) return;
+  const handlePromote = (chunk: ChunkFull) => {
+    setViewingChunk(null);
+    setPromotingChunk(chunk);
+  };
 
-    const confirmed = confirm(`Promote chunk ${chunk.id} to ${toPath}?`);
-    if (!confirmed) return;
+  const handlePromoteSubmit = async (toPath: string, skipExisting: boolean) => {
+    if (!promotingChunk) return;
 
     try {
-      await api.promoteBatch(selectedLayer, toPath, [chunk.id], true);
+      await api.promoteBatch(selectedLayer, toPath, [promotingChunk.id], skipExisting);
       await loadChunks();
       await refreshLayers();
-      setViewingChunk(null);
+      setPromotingChunk(null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      throw err;
     }
   };
 
@@ -375,6 +378,24 @@ export function App() {
           embeddingDim={layerMeta?.embedding_dim}
           onSubmit={handleEditSubmit}
           onClose={() => setEditingChunk(null)}
+        />
+      )}
+
+      {promotingChunk && (
+        <PromoteModal
+          chunk={promotingChunk}
+          selectedLayer={selectedLayer}
+          onPromote={handlePromoteSubmit}
+          onClose={() => setPromotingChunk(null)}
+        />
+      )}
+
+      {proposingChunk && (
+        <ProposeModal
+          chunk={proposingChunk}
+          selectedLayer={selectedLayer}
+          onPropose={handleProposeSubmit}
+          onClose={() => setProposingChunk(null)}
         />
       )}
 

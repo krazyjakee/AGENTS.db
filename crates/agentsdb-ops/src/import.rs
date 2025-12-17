@@ -4,12 +4,10 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use agentsdb_core::export::{
-    ExportBundleV1, ExportChunkV1, ExportLayerSchemaV1, ExportLayerV1, ExportNdjsonRecordV1,
+    ExportBundleV1, ExportLayerSchemaV1, ExportLayerV1, ExportNdjsonRecordV1,
     ExportSourceV1, ExportToolInfo,
 };
-use agentsdb_embeddings::config::{
-    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
-};
+use agentsdb_embeddings::config::get_immutable_embedding_options;
 use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 
 use crate::util::content_sha256_hex;
@@ -19,6 +17,11 @@ pub struct ImportOutcome {
     pub imported: usize,
     pub skipped: usize,
     pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reembedded_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reembedded_to: Option<String>,
+    pub reembedded_count: usize,
 }
 
 /// Parse an export file into a structured bundle (supports both JSON and NDJSON formats).
@@ -109,21 +112,6 @@ pub fn parse_export_bytes(input: &[u8]) -> anyhow::Result<ExportBundleV1> {
     })
 }
 
-/// Parse import data from bytes (supports both JSON and NDJSON formats)
-fn parse_input_bytes(input: &[u8]) -> anyhow::Result<Vec<ExportChunkV1>> {
-    let bundle = parse_export_bytes(input)?;
-    let mut out = Vec::new();
-    for l in bundle.layers {
-        out.extend(l.chunks);
-    }
-    Ok(out)
-}
-
-/// Parse import data from string (supports both JSON and NDJSON formats)
-fn parse_input_string(input: &str) -> anyhow::Result<Vec<ExportChunkV1>> {
-    parse_input_bytes(input.as_bytes())
-}
-
 fn sources_to_chunk_sources(sources: Vec<ExportSourceV1>) -> Vec<agentsdb_format::ChunkSource> {
     sources
         .into_iter()
@@ -208,7 +196,23 @@ pub fn import_into_layer(
 ) -> anyhow::Result<ImportOutcome> {
     ensure_target_permissions(abs_path, scope, allow_base)?;
 
-    let mut imported = parse_input_string(data).context("parse import data")?;
+    // Parse the full bundle to get layer metadata if available
+    let bundle = parse_export_bytes(data.as_bytes()).context("parse import data")?;
+    let mut imported = Vec::new();
+    let mut source_profile: Option<String> = None;
+
+    for layer in &bundle.layers {
+        imported.extend(layer.chunks.clone());
+        // Try to extract the source embedding profile from layer metadata
+        if source_profile.is_none() {
+            if let Some(meta_json) = &layer.layer_metadata_json {
+                if let Ok(meta) = LayerMetadataV1::from_json_bytes(meta_json.as_bytes()) {
+                    source_profile = Some(meta.embedding_profile.backend.clone());
+                }
+            }
+        }
+    }
+
     if imported.is_empty() {
         anyhow::bail!("no chunks found in import");
     }
@@ -223,7 +227,6 @@ pub fn import_into_layer(
     }
 
     let dir = abs_path.parent().unwrap_or_else(|| Path::new("."));
-    let siblings = standard_layer_paths_for_dir(dir);
 
     let mut existing_hashes: HashSet<String> = HashSet::new();
     let mut existing_ids: HashSet<u32> = HashSet::new();
@@ -262,16 +265,16 @@ pub fn import_into_layer(
         inferred.context("creating a new layer requires dim or input embeddings")?
     };
 
+    // Get the target embedding backend from AGENTS.db (immutable base layer options)
+    let target_options = get_immutable_embedding_options(dir)
+        .context("get immutable embedding options from AGENTS.db")?;
+    let target_backend = target_options.backend.clone();
+
     let embedder_for_dim = |dim_usize: usize| -> anyhow::Result<
         Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>,
     > {
-        let options = roll_up_embedding_options_from_paths(
-            Some(siblings.local.as_path()),
-            Some(siblings.user.as_path()),
-            Some(siblings.delta.as_path()),
-            Some(siblings.base.as_path()),
-        )
-        .context("roll up options")?;
+        let options = get_immutable_embedding_options(dir)
+            .context("get immutable embedding options")?;
         if let Some(cfg_dim) = options.dim {
             if cfg_dim != dim_usize {
                 anyhow::bail!(
@@ -286,9 +289,11 @@ pub fn import_into_layer(
 
     let mut layer_metadata_json: Option<Vec<u8>> = None;
     let mut embedder: Option<Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>> = None;
+    let mut target_profile: Option<String> = None;
 
     let mut prepared: Vec<agentsdb_format::ChunkInput> = Vec::new();
     let mut skipped = 0usize;
+    let mut reembedded_count = 0usize;
     let mut next_new_id = 1u32;
 
     if !exists && preserve_ids {
@@ -315,9 +320,26 @@ pub fn import_into_layer(
             existing_hashes.insert(hash.to_string());
         }
 
-        // Check if existing embedding has correct dimension
+        // Check if existing embedding needs re-embedding due to:
+        // 1. Missing embedding
+        // 2. Wrong dimension
+        // 3. Different backend than AGENTS.db (ensures consistency)
         let needs_reembedding = match c.embedding.as_ref() {
-            Some(v) => v.len() != inferred_dim,
+            Some(v) => {
+                // Re-embed if dimension mismatch
+                if v.len() != inferred_dim {
+                    true
+                } else {
+                    // Re-embed if source backend differs from target backend
+                    // This ensures all embeddings use the immutable backend from AGENTS.db
+                    if let Some(ref src_backend) = source_profile {
+                        src_backend != &target_backend
+                    } else {
+                        // No source profile info, keep existing embedding if dimension matches
+                        false
+                    }
+                }
+            },
             None => true,
         };
 
@@ -325,6 +347,7 @@ pub fn import_into_layer(
             // Re-embed if dimension mismatch or no embedding
             if embedder.is_none() {
                 let e = embedder_for_dim(inferred_dim)?;
+                target_profile = Some(e.profile().backend.clone());
                 let meta = LayerMetadataV1::new(e.profile().clone())
                     .with_embedder_metadata(e.metadata())
                     .with_tool(tool_name, tool_version);
@@ -333,6 +356,7 @@ pub fn import_into_layer(
                 embedder = Some(e);
             }
             let e = embedder.as_ref().expect("embedder");
+            reembedded_count += 1;
             e.embed(&[content.clone()])?
                 .into_iter()
                 .next()
@@ -381,6 +405,9 @@ pub fn import_into_layer(
             imported: 0,
             skipped,
             dry_run,
+            reembedded_from: source_profile.clone(),
+            reembedded_to: target_profile.clone(),
+            reembedded_count: 0,
         });
     }
 
@@ -408,6 +435,9 @@ pub fn import_into_layer(
             imported: prepared_len,
             skipped,
             dry_run: true,
+            reembedded_from: source_profile.clone(),
+            reembedded_to: target_profile.clone(),
+            reembedded_count,
         });
     }
 
@@ -420,6 +450,7 @@ pub fn import_into_layer(
         )
         .context("append")?;
     } else {
+        let mut new_chunks = prepared;
         let schema = agentsdb_format::LayerSchema {
             dim: inferred_dim as u32,
             element_type: agentsdb_format::EmbeddingElementType::F32,
@@ -428,7 +459,7 @@ pub fn import_into_layer(
         agentsdb_format::write_layer_atomic(
             abs_path,
             &schema,
-            &prepared,
+            &mut new_chunks,
             layer_metadata_json.as_deref(),
         )
         .context("create layer")?;
@@ -438,6 +469,9 @@ pub fn import_into_layer(
         imported: prepared_len,
         skipped,
         dry_run: false,
+        reembedded_from: source_profile,
+        reembedded_to: target_profile,
+        reembedded_count,
     })
 }
 
@@ -516,6 +550,7 @@ pub fn import_export_bundle_into_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentsdb_core::export::ExportChunkV1;
 
     fn minimal_chunk(id: u32, content: &str) -> ExportChunkV1 {
         ExportChunkV1 {

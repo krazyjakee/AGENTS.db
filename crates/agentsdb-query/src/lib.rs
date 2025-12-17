@@ -117,7 +117,7 @@ pub fn search_layers_with_options(
             if !kinds.contains(chunk.kind) {
                 continue;
             }
-        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS {
+        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS || chunk.kind.starts_with("meta.") {
             continue;
         }
 

@@ -54,8 +54,8 @@ pub(crate) fn cmd_compact(
     agentsdb_format::ensure_writable_layer_path_allow_user(&out)
         .context("refuse to write compacted output to a non-writable layer path")?;
 
-    let (schema, chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
-    agentsdb_format::write_layer_atomic(&out, &schema, &chunks, None)
+    let (schema, mut chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
+    agentsdb_format::write_layer_atomic(&out, &schema, &mut chunks, None)
         .context("write compacted layer")?;
 
     if json {
@@ -109,14 +109,27 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
             continue;
         }
 
-        let Ok(file) = agentsdb_format::LayerFile::open_lenient(&path) else {
-            continue;
+        let file = match agentsdb_format::LayerFile::open_lenient(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "Warning: skipping {} (failed to open: {})",
+                    path.display(),
+                    e
+                );
+                continue;
+            }
         };
 
         let schema = agentsdb_format::schema_of(&file);
-        let chunks = agentsdb_format::read_all_chunks(&file)
+        let mut chunks = agentsdb_format::read_all_chunks(&file)
             .with_context(|| format!("read chunks from {}", path.display()))?;
-        agentsdb_format::write_layer_atomic(&path, &schema, &chunks, None)
+
+        // Filter out options chunks from non-base layers (AGENTS.db is already excluded above).
+        // Only AGENTS.db (base layer) should contain options documents.
+        chunks.retain(|c| c.kind != agentsdb_embeddings::config::KIND_OPTIONS);
+
+        agentsdb_format::write_layer_atomic(&path, &schema, &mut chunks, None)
             .with_context(|| format!("rewrite {}", path.display()))?;
         compacted.push(path);
     }
@@ -173,6 +186,12 @@ fn compact_layers(
         }
 
         for c in agentsdb_format::read_all_chunks(&file)? {
+            // Skip options chunks from non-base layers.
+            // Only AGENTS.db (base layer) should contain options documents.
+            if layer_name != "base" && c.kind == agentsdb_embeddings::config::KIND_OPTIONS {
+                continue;
+            }
+
             // When duplicates exist (either within a file or across layers),
             // always keep the newest entry (last occurrence).
             // This allows compact to fix corrupted files with duplicate IDs.
@@ -258,20 +277,22 @@ mod tests {
         let user_path = dir.join("AGENTS.user.db");
         let out_path = dir.join("AGENTS.compacted.db");
 
+        let mut base_chunks = [
+            chunk(1, "canonical", "base a"),
+            chunk(2, "canonical", "base b"),
+        ];
         agentsdb_format::write_layer_atomic(
             &base_path,
             &schema(),
-            &[
-                chunk(1, "canonical", "base a"),
-                chunk(2, "canonical", "base b"),
-            ],
+            &mut base_chunks,
             None,
         )
         .unwrap();
+        let mut user_chunks = [chunk(100, "note", "user x")];
         agentsdb_format::write_layer_atomic(
             &user_path,
             &schema(),
-            &[chunk(100, "note", "user x")],
+            &mut user_chunks,
             None,
         )
         .unwrap();
@@ -298,17 +319,19 @@ mod tests {
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
 
+        let mut base_chunks = [chunk(1, "canonical", "old content")];
         agentsdb_format::write_layer_atomic(
             &base_path,
             &schema(),
-            &[chunk(1, "canonical", "old content")],
+            &mut base_chunks,
             None,
         )
         .unwrap();
+        let mut user_chunks = [chunk(1, "canonical", "new content")];
         agentsdb_format::write_layer_atomic(
             &user_path,
             &schema(),
-            &[chunk(1, "canonical", "new content")],
+            &mut user_chunks,
             None,
         )
         .unwrap();
@@ -330,14 +353,16 @@ mod tests {
         let junk_path = dir.join("junk.db");
         let other_path = dir.join("notes.txt");
 
+        let mut a_chunks = [chunk(1, "canonical", "a")];
         agentsdb_format::write_layer_atomic(
             &a_path,
             &schema(),
-            &[chunk(1, "canonical", "a")],
+            &mut a_chunks,
             None,
         )
         .unwrap();
-        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")], None)
+        let mut b_chunks = [chunk(2, "note", "b")];
+        agentsdb_format::write_layer_atomic(&b_path, &schema(), &mut b_chunks, None)
             .unwrap();
         std::fs::write(&junk_path, b"not an agentsdb layer").unwrap();
         std::fs::write(&other_path, b"ignore").unwrap();

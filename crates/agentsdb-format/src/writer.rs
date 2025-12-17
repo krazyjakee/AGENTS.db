@@ -54,11 +54,35 @@ pub fn schema_of(file: &LayerFile) -> LayerSchema {
 pub fn write_layer_atomic(
     path: impl AsRef<Path>,
     schema: &LayerSchema,
-    chunks: &[ChunkInput],
+    chunks: &mut [ChunkInput],
     layer_metadata_json: Option<&[u8]>,
-) -> Result<(), Error> {
+) -> Result<Vec<u32>, Error> {
+    // Auto-assign IDs for chunks with id=0
+    let mut used_ids: HashSet<u32> = chunks.iter().filter(|c| c.id != 0).map(|c| c.id).collect();
+    let mut next_id = used_ids
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
+        .max(1);
+
+    let mut assigned = Vec::with_capacity(chunks.len());
+    for c in chunks.iter_mut() {
+        if c.id == 0 {
+            while used_ids.contains(&next_id) {
+                next_id = next_id.saturating_add(1);
+            }
+            c.id = next_id;
+            used_ids.insert(c.id);
+            next_id = next_id.saturating_add(1);
+        }
+        assigned.push(c.id);
+    }
+
     let bytes = encode_layer(schema, chunks, layer_metadata_json)?;
-    atomic_write(path.as_ref(), &bytes)
+    atomic_write(path.as_ref(), &bytes)?;
+    Ok(assigned)
 }
 
 pub fn append_layer_atomic(
@@ -598,7 +622,7 @@ mod tests {
             element_type: EmbeddingElementType::F32,
             quant_scale: 1.0,
         };
-        let chunks = vec![ChunkInput {
+        let mut chunks = vec![ChunkInput {
             id: 1,
             kind: "note".to_string(),
             content: "hello".to_string(),
@@ -609,7 +633,7 @@ mod tests {
             sources: vec![ChunkSource::SourceString("file:1".to_string())],
         }];
 
-        write_layer_atomic(&path, &schema, &chunks, None).unwrap();
+        write_layer_atomic(&path, &schema, &mut chunks, None).unwrap();
         let opened = LayerFile::open(&path).unwrap();
         assert_eq!(opened.chunk_count, 1);
         assert_eq!(opened.embedding_matrix.dim, 2);
@@ -626,7 +650,7 @@ mod tests {
             element_type: EmbeddingElementType::F32,
             quant_scale: 1.0,
         };
-        let chunks = vec![ChunkInput {
+        let mut chunks = vec![ChunkInput {
             id: 1,
             kind: "note".to_string(),
             content: "hello".to_string(),
@@ -638,7 +662,7 @@ mod tests {
         }];
 
         let meta1 = br#"{"v":1,"x":"y"}"#;
-        write_layer_atomic(&path, &schema, &chunks, Some(meta1)).unwrap();
+        write_layer_atomic(&path, &schema, &mut chunks, Some(meta1)).unwrap();
         let opened = LayerFile::open(&path).unwrap();
         assert_eq!(
             opened.layer_metadata_json().unwrap().unwrap(),

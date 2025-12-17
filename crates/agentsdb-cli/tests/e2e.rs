@@ -107,7 +107,8 @@ fn write_layer_with_custom_profile(path: &Path, dim: u32, output_norm: &str) {
         sources: Vec::new(),
     };
 
-    agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&metadata))
+    let mut chunks = [chunk];
+    agentsdb_format::write_layer_atomic(path, &schema, &mut chunks, Some(&metadata))
         .expect("write layer");
 }
 
@@ -139,7 +140,8 @@ fn write_layer_two_chunks(path: &Path) {
             sources: Vec::new(),
         },
     ];
-    agentsdb_format::write_layer_atomic(path, &schema, &chunks, None).expect("write layer");
+    let mut chunks_mut = chunks;
+    agentsdb_format::write_layer_atomic(path, &schema, &mut chunks_mut, None).expect("write layer");
 }
 
 #[test]
@@ -251,6 +253,7 @@ fn compile_is_deterministic_for_hash_backend() {
 fn options_set_show_roundtrip() {
     let dir = TempDir::new("agentsdb_e2e_options");
 
+    // Options must be set on base layer (AGENTS.db) for consistency
     let out = run_ok_json(
         dir.path(),
         &[
@@ -258,7 +261,7 @@ fn options_set_show_roundtrip() {
             "options",
             "set",
             "--scope",
-            "local",
+            "base",
             "--backend",
             "hash",
             "--dim",
@@ -272,9 +275,9 @@ fn options_set_show_roundtrip() {
     assert_eq!(out["ok"], true);
     assert_eq!(out["resolved"]["backend"], "hash");
     assert_eq!(out["resolved"]["dim"], 8);
-    assert_eq!(out["local"]["exists"], true);
-    assert_eq!(out["local"]["patch"]["backend"], "hash");
-    assert_eq!(out["local"]["patch"]["dim"], 8);
+    assert_eq!(out["base"]["exists"], true);
+    assert_eq!(out["base"]["patch"]["backend"], "hash");
+    assert_eq!(out["base"]["patch"]["dim"], 8);
 }
 
 #[test]
@@ -540,9 +543,10 @@ fn diff_and_promote_json_flow() {
     assert_eq!(diff["new_ids"][0].as_u64(), Some(3));
     assert_eq!(diff["overrides"][0].as_u64(), Some(2));
 
-    run_ok(
+    let promote_result = run_ok_json(
         dir.path(),
         &[
+            "--json",
             "promote",
             "--from",
             "AGENTS.delta.db",
@@ -553,6 +557,26 @@ fn diff_and_promote_json_flow() {
         ],
     );
 
+    // Get the auto-assigned IDs from the promote result
+    let promoted_ids = promote_result["promoted"].as_array().unwrap();
+    assert_eq!(promoted_ids.len(), 2);
+    let new_id_1 = promoted_ids[0].as_u64().unwrap();
+    let new_id_2 = promoted_ids[1].as_u64().unwrap();
+
+    let c1 = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "inspect",
+            "--layer",
+            "AGENTS.user.db",
+            "--id",
+            &new_id_1.to_string(),
+        ],
+    );
+    assert_eq!(c1["id"].as_u64(), Some(new_id_1));
+    assert_eq!(c1["author"].as_str(), Some("human"));
+
     let c2 = run_ok_json(
         dir.path(),
         &[
@@ -561,25 +585,11 @@ fn diff_and_promote_json_flow() {
             "--layer",
             "AGENTS.user.db",
             "--id",
-            "2",
+            &new_id_2.to_string(),
         ],
     );
-    assert_eq!(c2["id"].as_u64(), Some(2));
+    assert_eq!(c2["id"].as_u64(), Some(new_id_2));
     assert_eq!(c2["author"].as_str(), Some("human"));
-
-    let c3 = run_ok_json(
-        dir.path(),
-        &[
-            "--json",
-            "inspect",
-            "--layer",
-            "AGENTS.user.db",
-            "--id",
-            "3",
-        ],
-    );
-    assert_eq!(c3["id"].as_u64(), Some(3));
-    assert_eq!(c3["author"].as_str(), Some("human"));
 }
 
 #[test]
@@ -737,19 +747,8 @@ fn promote_detects_duplicates_and_can_skip() {
         ],
     );
 
-    run_err(
-        dir.path(),
-        &[
-            "promote",
-            "--from",
-            "AGENTS.delta.db",
-            "--to",
-            "AGENTS.user.db",
-            "--ids",
-            "2",
-        ],
-    );
-
+    // Since promoted chunks now get auto-assigned new IDs, duplicates are allowed
+    // The first promote should succeed
     let out = run_ok_json(
         dir.path(),
         &[
@@ -761,11 +760,30 @@ fn promote_detects_duplicates_and_can_skip() {
             "AGENTS.user.db",
             "--ids",
             "2",
-            "--skip-existing",
         ],
     );
-    assert_eq!(out["promoted"].as_array().unwrap().len(), 0);
-    assert_eq!(out["skipped"][0].as_u64(), Some(2));
+    assert_eq!(out["promoted"].as_array().unwrap().len(), 1);
+
+    // Promoting again should also succeed with a different auto-assigned ID
+    let out2 = run_ok_json(
+        dir.path(),
+        &[
+            "--json",
+            "promote",
+            "--from",
+            "AGENTS.delta.db",
+            "--to",
+            "AGENTS.user.db",
+            "--ids",
+            "2",
+        ],
+    );
+    assert_eq!(out2["promoted"].as_array().unwrap().len(), 1);
+    // The second promotion should get a different ID
+    assert_ne!(
+        out["promoted"][0].as_u64(),
+        out2["promoted"][0].as_u64()
+    );
 }
 
 #[test]
@@ -809,18 +827,13 @@ fn proposals_accept_appends_decision_record() {
         &["proposals", "--dir", ".", "accept", "--ids", "6", "--yes"],
     );
 
-    let c5 = run_ok_json(
+    // Verify the user layer was created and has the promoted chunk
+    let user_layer = run_ok_json(
         dir.path(),
-        &[
-            "--json",
-            "inspect",
-            "--layer",
-            "AGENTS.user.db",
-            "--id",
-            "5",
-        ],
+        &["--json", "inspect", "--layer", "AGENTS.user.db"],
     );
-    assert_eq!(c5["id"].as_u64(), Some(5));
+    // Should have 1 chunk (the promoted chunk with a new auto-assigned ID)
+    assert_eq!(user_layer["chunk_count"].as_u64(), Some(1));
 
     let after = run_ok_json(
         dir.path(),

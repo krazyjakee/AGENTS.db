@@ -1,9 +1,7 @@
 use anyhow::Context;
 use std::path::Path;
 
-use agentsdb_embeddings::config::{
-    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
-};
+use agentsdb_embeddings::config::get_immutable_embedding_options;
 use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 use agentsdb_format::{ChunkInput, ChunkSource, LayerFile};
 
@@ -58,18 +56,12 @@ pub fn append_chunk(
 
     let exists = path.exists();
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let siblings = standard_layer_paths_for_dir(dir);
 
     let embedder_for_dim = |dim_usize: usize| -> anyhow::Result<
         Box<dyn agentsdb_embeddings::embedder::Embedder + Send + Sync>,
     > {
-        let options = roll_up_embedding_options_from_paths(
-            Some(siblings.local.as_path()),
-            Some(siblings.user.as_path()),
-            Some(siblings.delta.as_path()),
-            Some(siblings.base.as_path()),
-        )
-        .context("roll up options")?;
+        let options = get_immutable_embedding_options(dir)
+            .context("get immutable embedding options")?;
         if let Some(cfg_dim) = options.dim {
             if cfg_dim != dim_usize {
                 anyhow::bail!(
@@ -177,7 +169,8 @@ pub fn append_chunk(
             element_type: agentsdb_format::EmbeddingElementType::F32,
             quant_scale: 1.0,
         };
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&layer_metadata_json))
+        let mut chunks = [chunk];
+        agentsdb_format::write_layer_atomic(path, &schema, &mut chunks, Some(&layer_metadata_json))
             .context("create layer")?;
         Ok(assigned)
     }

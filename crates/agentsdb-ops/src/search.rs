@@ -1,6 +1,5 @@
 use anyhow::Context;
 use agentsdb_core::types::{SearchFilters, SearchResult};
-use agentsdb_embeddings::config::roll_up_embedding_options;
 use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
 use agentsdb_query::{LayerSet, SearchOptions, SearchQuery};
 
@@ -51,23 +50,20 @@ pub fn search_layers(
     // Get dimension from first layer
     let dim = opened[0].1.embedding_dim();
 
-    // Separate layers by type for options roll-up
-    let mut local = None;
-    let mut user = None;
-    let mut delta = None;
-    let mut base = None;
-    for (layer_id, file) in &opened {
-        match layer_id {
-            agentsdb_core::types::LayerId::Local => local = Some(file),
-            agentsdb_core::types::LayerId::User => user = Some(file),
-            agentsdb_core::types::LayerId::Delta => delta = Some(file),
-            agentsdb_core::types::LayerId::Base => base = Some(file),
-        }
-    }
+    // Get directory from base layer path (or first available layer)
+    // All layers should be in the same directory, and we need this to read immutable options from AGENTS.db
+    let dir = layers
+        .base
+        .as_deref()
+        .or(layers.user.as_deref())
+        .or(layers.delta.as_deref())
+        .or(layers.local.as_deref())
+        .and_then(|p| std::path::Path::new(p).parent())
+        .unwrap_or_else(|| std::path::Path::new("."));
 
-    // Roll up embedding options from layer hierarchy
-    let options =
-        roll_up_embedding_options(&[local, user, delta, base]).context("roll up options")?;
+    // Get immutable embedding options from base layer only
+    let options = agentsdb_embeddings::config::get_immutable_embedding_options(dir)
+        .context("get immutable embedding options")?;
 
     // Validate configured dimension matches layer dimension
     if let Some(cfg_dim) = options.dim {
@@ -162,23 +158,20 @@ pub fn embed_query(layers: &LayerSet, query: &str) -> anyhow::Result<Vec<f32>> {
     // Get dimension from first layer
     let dim = opened[0].1.embedding_dim();
 
-    // Separate layers by type for options roll-up
-    let mut local = None;
-    let mut user = None;
-    let mut delta = None;
-    let mut base = None;
-    for (layer_id, file) in &opened {
-        match layer_id {
-            agentsdb_core::types::LayerId::Local => local = Some(file),
-            agentsdb_core::types::LayerId::User => user = Some(file),
-            agentsdb_core::types::LayerId::Delta => delta = Some(file),
-            agentsdb_core::types::LayerId::Base => base = Some(file),
-        }
-    }
+    // Get directory from base layer path (or first available layer)
+    // All layers should be in the same directory, and we need this to read immutable options from AGENTS.db
+    let dir = layers
+        .base
+        .as_deref()
+        .or(layers.user.as_deref())
+        .or(layers.delta.as_deref())
+        .or(layers.local.as_deref())
+        .and_then(|p| std::path::Path::new(p).parent())
+        .unwrap_or_else(|| std::path::Path::new("."));
 
-    // Roll up embedding options
-    let options =
-        roll_up_embedding_options(&[local, user, delta, base]).context("roll up options")?;
+    // Get immutable embedding options from base layer only
+    let options = agentsdb_embeddings::config::get_immutable_embedding_options(dir)
+        .context("get immutable embedding options")?;
 
     // Validate configured dimension
     if let Some(cfg_dim) = options.dim {

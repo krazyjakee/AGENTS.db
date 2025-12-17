@@ -3,9 +3,7 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use agentsdb_embeddings::config::{
-    roll_up_embedding_options_from_paths, standard_layer_paths_for_dir,
-};
+use agentsdb_embeddings::config::get_immutable_embedding_options;
 
 use crate::commands::compile::compile_to_layer;
 use crate::types::{CompileChunk, CompileInput, CompileSchema, CompileSource};
@@ -97,14 +95,8 @@ pub(crate) fn cmd_init(
         None => {
             let out_path = Path::new(out);
             let out_dir = out_path.parent().unwrap_or_else(|| Path::new("."));
-            let siblings = standard_layer_paths_for_dir(out_dir);
-            let options = roll_up_embedding_options_from_paths(
-                Some(siblings.local.as_path()),
-                Some(siblings.user.as_path()),
-                Some(siblings.delta.as_path()),
-                Some(siblings.base.as_path()),
-            )
-            .context("roll up options")?;
+            let options = get_immutable_embedding_options(out_dir)
+                .context("get immutable embedding options")?;
             options
                 .dim
                 .map(|v| u32::try_from(v).context("configured dim overflows u32"))
@@ -249,9 +241,10 @@ mod tests {
         std::fs::write(root.join("README.md"), "# Title\n").expect("write README");
 
         let root_s = root.to_string_lossy().to_string();
+        // Write options to base layer (AGENTS.db) since that's the only layer read for immutable config
         crate::commands::options::cmd_options_set(
             &root_s,
-            "local",
+            "base",
             None,
             None,
             None,
