@@ -1,6 +1,7 @@
 use anyhow::Context;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -95,6 +96,16 @@ fn visit_dir_wide_docs(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyho
             }
             visit_dir_wide_docs(root, &path, out)?;
         } else if ty.is_file() && is_doc_candidate(&path) {
+            // Skip empty files
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                if metadata.len() == 0 {
+                    continue;
+                }
+            }
+            // Skip binary files
+            if is_likely_binary(&path) {
+                continue;
+            }
             let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             out.push(rel);
         }
@@ -154,6 +165,49 @@ fn is_doc_candidate(path: &Path) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
     matches!(ext.as_str(), "md" | "mdx" | "rst" | "txt" | "adoc" | "org")
+}
+
+/// Checks if a file is likely binary by reading the first 8KB and looking for null bytes
+/// or a high ratio of non-printable characters.
+fn is_likely_binary(path: &Path) -> bool {
+    const SAMPLE_SIZE: usize = 8192;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return true; // Assume binary if we can't open it
+    };
+
+    let mut buffer = vec![0u8; SAMPLE_SIZE];
+    let Ok(bytes_read) = file.read(&mut buffer) else {
+        return true; // Assume binary if we can't read it
+    };
+
+    if bytes_read == 0 {
+        return false; // Empty file, not binary (though this is caught elsewhere)
+    }
+
+    let sample = &buffer[..bytes_read];
+
+    // Check for null bytes (strong indicator of binary)
+    if sample.contains(&0) {
+        return true;
+    }
+
+    // Check ratio of non-printable characters
+    let non_printable_count = sample
+        .iter()
+        .filter(|&&b| {
+            // Allow common whitespace characters
+            if matches!(b, b'\n' | b'\r' | b'\t' | b' ') {
+                return false;
+            }
+            // Check if it's printable ASCII or valid UTF-8 continuation
+            b < 32 || (b >= 127 && b < 160)
+        })
+        .count();
+
+    // If more than 30% are non-printable, consider it binary
+    let threshold = bytes_read * 30 / 100;
+    non_printable_count > threshold
 }
 
 fn visit_dir(
@@ -302,6 +356,46 @@ mod tests {
         assert!(rendered.contains(&format!("docs{}design.md", std::path::MAIN_SEPARATOR)));
         assert!(rendered.contains(&format!("src{}notes.txt", std::path::MAIN_SEPARATOR)));
         assert!(!rendered.contains(&format!("target{}ignored.md", std::path::MAIN_SEPARATOR)));
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn init_skips_binary_and_empty_files() {
+        let root = make_temp_dir();
+        std::fs::create_dir_all(root.join("docs")).expect("create docs");
+
+        // Create a normal text file
+        std::fs::write(root.join("README.md"), "# Title\n\nSome content.\n").expect("write readme");
+
+        // Create an empty file
+        std::fs::write(root.join("empty.txt"), "").expect("write empty");
+
+        // Create a binary file (with null bytes)
+        let binary_data = vec![0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE];
+        std::fs::write(root.join("docs").join("binary.txt"), binary_data).expect("write binary");
+
+        // Create a file with high ratio of non-printable chars
+        let non_printable: Vec<u8> = (0..200).map(|i| if i % 4 == 0 { b'a' } else { 0x7F }).collect();
+        std::fs::write(root.join("docs").join("garbled.md"), non_printable).expect("write garbled");
+
+        let files = collect_files_wide_docs(&root).expect("collect should succeed");
+        let rendered: Vec<String> = files
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        // Should include normal text file
+        assert!(rendered.contains(&"README.md".to_string()), "Should include README.md");
+
+        // Should NOT include empty file
+        assert!(!rendered.contains(&"empty.txt".to_string()), "Should exclude empty.txt");
+
+        // Should NOT include binary file
+        assert!(!rendered.contains(&format!("docs{}binary.txt", std::path::MAIN_SEPARATOR)), "Should exclude binary.txt");
+
+        // Should NOT include file with high ratio of non-printable chars
+        assert!(!rendered.contains(&format!("docs{}garbled.md", std::path::MAIN_SEPARATOR)), "Should exclude garbled.md");
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
