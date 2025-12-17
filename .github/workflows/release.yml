@@ -38,8 +38,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        working-directory: crates/agentsdb-web/frontend
+        run: |
+          npm install
+          npm run build
+
       - name: Build
-        run: cargo build -p agentsdb-cli --release --locked --target ${{ matrix.target }}
+        run: cargo build -p agentsdb-cli --release --locked --target ${{ matrix.target }} --features all-embedders
 
       - name: Package (unix)
         if: runner.os != 'Windows'

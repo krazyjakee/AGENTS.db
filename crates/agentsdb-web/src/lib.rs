@@ -7,16 +7,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use agentsdb_core::embed::hash_embed;
-use agentsdb_format::{ChunkInput, ChunkSource, LayerFile, SourceRef};
+use agentsdb_format::{LayerFile, SourceRef};
 
 const TOMBSTONE_KIND: &str = "tombstone";
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
+const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
+const PROPOSAL_EVENT_LAYER: &str = "AGENTS.delta.db";
 
 const LOGO_PNG: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.png"));
-const INDEX_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/index.html"));
-const APP_CSS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.css"));
-const APP_JS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.js"));
 
 pub fn serve(root: &str, bind: &str) -> anyhow::Result<()> {
     let root = std::fs::canonicalize(root).with_context(|| format!("canonicalize root {root}"))?;
@@ -114,28 +112,69 @@ struct ChunkFull {
     removed: bool,
 }
 
+fn serve_static_file(path: &str) -> anyhow::Result<(String, Vec<u8>)> {
+    let dist_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist");
+    let file_path = dist_dir.join(path.trim_start_matches('/'));
+
+    // Security check: ensure the path doesn't escape dist directory
+    let canonical = std::fs::canonicalize(&file_path)
+        .with_context(|| format!("file not found: {}", path))?;
+    if !canonical.starts_with(&dist_dir) {
+        anyhow::bail!("invalid path: {}", path);
+    }
+
+    let content = std::fs::read(&canonical)
+        .with_context(|| format!("read file: {}", path))?;
+
+    // Determine content type based on extension
+    let content_type = match canonical.extension().and_then(|s| s.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("woff") | Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        _ => "application/octet-stream",
+    };
+
+    Ok((content_type.to_string(), content))
+}
+
 fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyhow::Result<()> {
     let req = read_request(stream).context("read request")?;
 
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/") => write_response(
-            stream,
-            200,
-            "text/html; charset=utf-8",
-            INDEX_HTML.as_bytes(),
-        )
-        .context("write index"),
-        ("GET", "/assets/app.css") => {
-            write_response(stream, 200, "text/css; charset=utf-8", APP_CSS.as_bytes())
-                .context("write app.css")
+        ("GET", "/") => {
+            match serve_static_file("index.html") {
+                Ok((content_type, body)) => {
+                    write_response(stream, 200, &content_type, &body).context("write index")
+                }
+                Err(_) => write_response(
+                    stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    b"<html><body><h1>Build frontend first</h1><p>Run: <code>cd frontend && npm install && npm run build</code></p></body></html>",
+                )
+                .context("write fallback index"),
+            }
         }
-        ("GET", "/assets/app.js") => write_response(
-            stream,
-            200,
-            "text/javascript; charset=utf-8",
-            APP_JS.as_bytes(),
-        )
-        .context("write app.js"),
+        ("GET", path) if path.starts_with("/assets/") => {
+            match serve_static_file(path) {
+                Ok((content_type, body)) => {
+                    write_response(stream, 200, &content_type, &body).context("write asset")
+                }
+                Err(err) => write_response(
+                    stream,
+                    404,
+                    "text/plain; charset=utf-8",
+                    format!("not found: {err}\n").as_bytes(),
+                )
+                .context("write 404"),
+            }
+        }
         ("GET", "/logo.png") => {
             write_response(stream, 200, "image/png", LOGO_PNG).context("write /logo.png")
         }
@@ -223,6 +262,18 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             write_response(stream, 200, "application/json", &body)
                 .context("write /api/layer/chunks")
         }
+        ("GET", "/api/version") => {
+            #[derive(Serialize)]
+            struct Out {
+                version: &'static str,
+            }
+
+            let out = Out {
+                version: env!("CARGO_PKG_VERSION"),
+            };
+            let body = serde_json::to_vec_pretty(&out)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/version")
+        }
         ("GET", "/api/layer/chunk") => {
             let layer = req
                 .query
@@ -245,6 +296,16 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             let body = serde_json::to_vec_pretty(&chunk)?;
             write_response(stream, 200, "application/json", &body).context("write /api/layer/chunk")
         }
+        ("POST", "/api/search") => {
+            let input: SearchInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for search")?;
+            let results = {
+                let st = state.lock().expect("poisoned mutex");
+                perform_search(&st, input)?
+            };
+            let body = serde_json::to_vec_pretty(&results)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/search")
+        }
         ("POST", "/api/layer/add") => {
             let input: AddInput =
                 serde_json::from_slice(&req.body).context("parse JSON body for add")?;
@@ -262,6 +323,25 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     &input.sources,
                     &input.source_chunks,
                 )?;
+
+                // If tombstone_old is true and we're editing an existing chunk (id is provided),
+                // append a tombstone for the old version
+                if input.tombstone_old && input.id.is_some() {
+                    let tombstone_id = input.id.unwrap();
+                    append_chunk(
+                        &abs_path,
+                        &input.scope,
+                        None, // Auto-assign a new ID for the tombstone
+                        TOMBSTONE_KIND,
+                        &format!("Replaced chunk id {}", tombstone_id),
+                        1.0,
+                        None,
+                        &[],
+                        &[tombstone_id],
+                    )
+                    .context("append tombstone for old version")?;
+                }
+
                 st.cache.remove(&input.path);
                 (assigned, input.path)
             };
@@ -296,7 +376,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     1.0,
                     None,
                     &Vec::new(),
-                    &vec![input.id],
+                    &[input.id],
                 )?;
                 st.cache.remove(&input.path);
             }
@@ -314,6 +394,136 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             };
             let body = serde_json::to_vec_pretty(&out)?;
             write_response(stream, 200, "application/json", &body).context("write remove response")
+        }
+        ("GET", "/api/export") => {
+            let rel_path = req
+                .query
+                .get("path")
+                .context("missing query param: path")?
+                .to_string();
+            let format = req
+                .query
+                .get("format")
+                .map(String::as_str)
+                .unwrap_or("json");
+            let redact = req
+                .query
+                .get("redact")
+                .map(String::as_str)
+                .unwrap_or("none");
+            let (content_type, body) = {
+                let st = state.lock().expect("poisoned mutex");
+                let abs_path = resolve_layer_path(&st.root, &rel_path)?;
+                export_layer(abs_path.as_path(), &rel_path, format, redact)?
+            };
+            write_response(stream, 200, content_type, &body).context("write /api/export")
+        }
+        ("POST", "/api/import") => {
+            let input: ImportInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for import")?;
+            let path = input.path.clone();
+            let (imported, skipped, dry_run) = {
+                let mut st = state.lock().expect("poisoned mutex");
+                let abs_path = resolve_layer_path(&st.root, &input.path)?;
+                let out = import_into_layer(
+                    abs_path.as_path(),
+                    &input.scope,
+                    input.format.as_deref().unwrap_or("json"),
+                    &input.data,
+                    input.dry_run.unwrap_or(false),
+                    input.dedupe.unwrap_or(false),
+                    input.preserve_ids.unwrap_or(false),
+                    input.allow_base.unwrap_or(false),
+                    input.dim,
+                )?;
+                if !out.2 {
+                    st.cache.remove(&input.path);
+                }
+                out
+            };
+            let body = serde_json::to_vec_pretty(&serde_json::json!({
+                "ok": true,
+                "path": path,
+                "imported": imported,
+                "skipped": skipped,
+                "dry_run": dry_run
+            }))?;
+            write_response(stream, 200, "application/json", &body).context("write /api/import")
+        }
+        ("GET", "/api/proposals") => {
+            let include_all = req
+                .query
+                .get("all")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let proposals = {
+                let mut st = state.lock().expect("poisoned mutex");
+                list_proposals(&mut st, include_all)?
+            };
+            let body = serde_json::to_vec_pretty(&proposals)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/proposals")
+        }
+        ("POST", "/api/proposals/propose") => {
+            let input: ProposeInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for propose")?;
+            let proposal_id = {
+                let mut st = state.lock().expect("poisoned mutex");
+                record_proposal(&mut st, input)?
+            };
+            let body = serde_json::to_vec_pretty(
+                &serde_json::json!({ "ok": true, "proposal_id": proposal_id }),
+            )?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write /api/proposals/propose")
+        }
+        ("POST", "/api/proposals/reject") => {
+            let input: RejectInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for reject")?;
+            {
+                let mut st = state.lock().expect("poisoned mutex");
+                reject_proposals(&mut st, &input.proposal_ids, input.reason.as_deref())?;
+            }
+            let body = serde_json::to_vec_pretty(&serde_json::json!({ "ok": true }))?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write /api/proposals/reject")
+        }
+        ("POST", "/api/proposals/accept") => {
+            let input: AcceptInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for accept")?;
+            let out = {
+                let mut st = state.lock().expect("poisoned mutex");
+                accept_proposals(&mut st, &input.proposal_ids, input.skip_existing)?
+            };
+            let body = serde_json::to_vec_pretty(&out)?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write /api/proposals/accept")
+        }
+        ("POST", "/api/promote") => {
+            let input: PromoteInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for promote")?;
+            let out = {
+                let mut st = state.lock().expect("poisoned mutex");
+                promote_delta_to_user(&mut st, &[input.id], input.skip_existing)?
+            };
+            let body = serde_json::to_vec_pretty(&out)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/promote")
+        }
+        ("POST", "/api/promote/batch") => {
+            let input: PromoteBatchInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for promote batch")?;
+            let out = {
+                let mut st = state.lock().expect("poisoned mutex");
+                promote_layers(
+                    &mut st,
+                    &input.from_path,
+                    &input.to_path,
+                    &input.ids,
+                    input.skip_existing,
+                )?
+            };
+            let body = serde_json::to_vec_pretty(&out)?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write /api/promote/batch")
         }
         _ => write_response(stream, 404, "text/plain; charset=utf-8", b"not found\n")
             .context("write 404"),
@@ -474,6 +684,36 @@ fn from_hex(b: u8) -> Option<u8> {
 }
 
 #[derive(Debug, Deserialize)]
+struct SearchInput {
+    query: String,
+    layers: Vec<String>,
+    #[serde(default)]
+    k: Option<usize>,
+    #[serde(default)]
+    kinds: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchOutput {
+    results: Vec<SearchResultJson>,
+    query_embedding_dim: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResultJson {
+    layer: String,
+    id: u32,
+    kind: String,
+    score: f32,
+    author: String,
+    confidence: f32,
+    created_at_unix_ms: u64,
+    content: String,
+    content_preview: String,
+    sources: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AddInput {
     path: String,
     scope: String, // local|delta
@@ -488,6 +728,8 @@ struct AddInput {
     sources: Vec<String>,
     #[serde(default)]
     source_chunks: Vec<u32>,
+    #[serde(default)]
+    tombstone_old: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -535,6 +777,97 @@ fn list_layers(root: &Path) -> anyhow::Result<Vec<ListedLayer>> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<SearchOutput> {
+    use agentsdb_ops::{search_layers, SearchConfig};
+    use agentsdb_query::LayerSet;
+
+    // Build LayerSet from input.layers
+    let mut layer_set = LayerSet {
+        base: None,
+        user: None,
+        delta: None,
+        local: None,
+    };
+    for path in &input.layers {
+        let abs_path = resolve_layer_path(&state.root, path)?;
+
+        // Determine layer type from filename
+        let layer_name = abs_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        if layer_name == "AGENTS.local.db" {
+            layer_set.local = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.user.db" {
+            layer_set.user = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.delta.db" {
+            layer_set.delta = Some(abs_path.to_string_lossy().to_string());
+        } else if layer_name == "AGENTS.db" {
+            layer_set.base = Some(abs_path.to_string_lossy().to_string());
+        } else {
+            // For custom layer names, try to infer from the path or default to base
+            layer_set.base = Some(abs_path.to_string_lossy().to_string());
+        }
+    }
+
+    // Perform search using shared operation
+    let config = SearchConfig {
+        query: Some(input.query),
+        query_vec: None,
+        k: input.k.unwrap_or(10),
+        kinds: input.kinds.unwrap_or_default(),
+        use_index: false,
+    };
+
+    let results = search_layers(&layer_set, config)?;
+
+    // Get embedding dimension from first opened layer
+    let opened = layer_set.open().context("open layers for dimension")?;
+    let query_embedding_dim = if !opened.is_empty() {
+        opened[0].1.embedding_dim()
+    } else {
+        0
+    };
+
+    // Convert results to JSON format
+    let json_results = results
+        .into_iter()
+        .map(|r| {
+            let content_preview = if r.chunk.content.len() > 200 {
+                format!("{}...", &r.chunk.content[..200])
+            } else {
+                r.chunk.content.clone()
+            };
+
+            SearchResultJson {
+                layer: format!("{:?}", r.layer),
+                id: r.chunk.id.get(),
+                kind: r.chunk.kind,
+                score: r.score,
+                author: format!("{:?}", r.chunk.author),
+                confidence: r.chunk.confidence,
+                created_at_unix_ms: r.chunk.created_at_unix_ms,
+                content: r.chunk.content,
+                content_preview,
+                sources: r.chunk.sources.into_iter().map(source_ref_to_string).collect(),
+            }
+        })
+        .collect();
+
+    Ok(SearchOutput {
+        results: json_results,
+        query_embedding_dim,
+    })
+}
+
+fn source_ref_to_string(s: agentsdb_core::types::ProvenanceRef) -> String {
+    match s {
+        agentsdb_core::types::ProvenanceRef::SourceString(s) => s,
+        agentsdb_core::types::ProvenanceRef::ChunkId(id) => format!("chunk:{}", id.get()),
+    }
 }
 
 fn resolve_layer_path(root: &Path, file_name: &str) -> anyhow::Result<PathBuf> {
@@ -671,14 +1004,12 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
 
 fn truncate_preview(s: &str, max_chars: usize) -> String {
     let mut out = String::new();
-    let mut count = 0usize;
-    for ch in s.chars() {
+    for (count, ch) in s.chars().enumerate() {
         if count >= max_chars {
             out.push('…');
             break;
         }
         out.push(ch);
-        count += 1;
     }
     out
 }
@@ -706,6 +1037,7 @@ fn read_chunk_full(path: &Path, removed: &HashSet<u32>, id: u32) -> anyhow::Resu
     anyhow::bail!("chunk id {id} not found");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_chunk(
     path: &Path,
     scope: &str,
@@ -717,79 +1049,875 @@ fn append_chunk(
     sources: &[String],
     source_chunks: &[u32],
 ) -> anyhow::Result<u32> {
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
-    if !matches!(file_name, "AGENTS.local.db" | "AGENTS.delta.db") {
-        anyhow::bail!("writes are only allowed for AGENTS.local.db / AGENTS.delta.db");
-    }
-    if scope == "local" && file_name != "AGENTS.local.db" {
-        anyhow::bail!("scope local only allowed for AGENTS.local.db");
-    }
-    if scope == "delta" && file_name != "AGENTS.delta.db" {
-        anyhow::bail!("scope delta only allowed for AGENTS.delta.db");
-    }
+    agentsdb_ops::write::append_chunk(
+        path,
+        scope,
+        id,
+        kind,
+        content,
+        confidence,
+        dim,
+        sources,
+        source_chunks,
+        "agentsdb-web",
+        env!("CARGO_PKG_VERSION"),
+    )
+}
 
-    let exists = path.exists();
-    if exists {
-        let file =
-            LayerFile::open(path).with_context(|| format!("open for append {}", path.display()))?;
-        let dim_usize = file.embedding_dim();
+fn export_layer(
+    abs_path: &Path,
+    rel_path: &str,
+    format: &str,
+    redact: &str,
+) -> anyhow::Result<(&'static str, Vec<u8>)> {
+    agentsdb_ops::export::export_layer(
+        abs_path,
+        rel_path,
+        format,
+        redact,
+        "agentsdb-web",
+        env!("CARGO_PKG_VERSION"),
+    )
+}
 
-        let mut chunk = ChunkInput {
-            id: id.unwrap_or(0), // 0 = auto-assign
-            kind: kind.to_string(),
-            author: "web".to_string(),
-            confidence,
-            created_at_unix_ms: now_unix_ms(),
-            content: content.to_string(),
-            embedding: Vec::new(),
-            sources: Vec::new(),
-        };
-        chunk.embedding = hash_embed(&chunk.content, dim_usize);
+fn import_into_layer(
+    abs_path: &Path,
+    scope: &str,
+    _format: &str,
+    data: &str,
+    dry_run: bool,
+    dedupe: bool,
+    preserve_ids: bool,
+    allow_base: bool,
+    dim: Option<u32>,
+) -> anyhow::Result<(usize, usize, bool)> {
+    let outcome = agentsdb_ops::import::import_into_layer(
+        abs_path,
+        scope,
+        data,
+        dry_run,
+        dedupe,
+        preserve_ids,
+        allow_base,
+        dim,
+        "agentsdb-web",
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    Ok((outcome.imported, outcome.skipped, outcome.dry_run))
+}
 
-        for s in sources.iter() {
-            chunk.sources.push(ChunkSource::SourceString(s.to_string()));
+#[derive(Debug, Deserialize)]
+struct ImportInput {
+    path: String,
+    scope: String, // local | delta | user | base
+    #[serde(default)]
+    format: Option<String>, // json | ndjson
+    data: String,
+    #[serde(default)]
+    dry_run: Option<bool>,
+    #[serde(default)]
+    dedupe: Option<bool>,
+    #[serde(default)]
+    preserve_ids: Option<bool>,
+    #[serde(default)]
+    allow_base: Option<bool>,
+    #[serde(default)]
+    dim: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProposeInput {
+    context_id: u32,
+    #[serde(default)]
+    from_path: Option<String>,
+    #[serde(default)]
+    to_path: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+    #[serde(default)]
+    what: Option<String>,
+    #[serde(default, rename = "where")]
+    where_: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RejectInput {
+    #[serde(rename = "ids")]
+    proposal_ids: Vec<u32>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AcceptInput {
+    #[serde(rename = "ids")]
+    proposal_ids: Vec<u32>,
+    #[serde(default)]
+    skip_existing: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromoteInput {
+    id: u32,
+    #[serde(default)]
+    skip_existing: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromoteBatchInput {
+    from_path: String,
+    to_path: String,
+    ids: Vec<u32>,
+    #[serde(default)]
+    skip_existing: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProposalStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProposalRow {
+    proposal_id: u32,
+    context_id: u32,
+    from_path: String,
+    to_path: String,
+    status: ProposalStatus,
+    created_at_unix_ms: Option<u64>,
+    title: Option<String>,
+    why: Option<String>,
+    what: Option<String>,
+    #[serde(rename = "where")]
+    where_: Option<String>,
+    exists_in_delta: bool,
+    exists_in_user: bool,
+    exists_in_source: bool,
+    exists_in_target: bool,
+    decided_at_unix_ms: Option<u64>,
+    decided_by: Option<String>,
+    decision_reason: Option<String>,
+    decision_outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProposalEvent {
+    #[serde(default)]
+    action: Option<String>, // propose | accept | reject
+    #[serde(default)]
+    proposal_id: Option<u32>, // for accept/reject
+    context_id: u32,
+    #[serde(default)]
+    from_path: Option<String>,
+    #[serde(default)]
+    to_path: Option<String>,
+    #[serde(default)]
+    created_at_unix_ms: Option<u64>,
+
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+    #[serde(default)]
+    what: Option<String>,
+    #[serde(default, rename = "where")]
+    where_: Option<String>,
+
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    outcome: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ProposalState {
+    proposal_id: u32,
+    context_id: u32,
+    from_path: String,
+    to_path: String,
+    status: ProposalStatus,
+    created_at_unix_ms: Option<u64>,
+    title: Option<String>,
+    why: Option<String>,
+    what: Option<String>,
+    where_: Option<String>,
+    decided_at_unix_ms: Option<u64>,
+    decided_by: Option<String>,
+    decision_reason: Option<String>,
+    decision_outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromoteOut {
+    ok: bool,
+    promoted: Vec<u32>,
+    skipped: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    out_path: Option<String>,
+}
+
+fn apply_proposal_event(map: &mut BTreeMap<u32, ProposalState>, event_id: u32, ev: ProposalEvent) {
+    let action = ev.action.as_deref().unwrap_or("propose");
+    match action {
+        "propose" => {
+            let from_path = ev
+                .from_path
+                .unwrap_or_else(|| "AGENTS.delta.db".to_string());
+            let to_path = ev.to_path.unwrap_or_else(|| "AGENTS.user.db".to_string());
+            map.insert(
+                event_id,
+                ProposalState {
+                    proposal_id: event_id,
+                    context_id: ev.context_id,
+                    from_path,
+                    to_path,
+                    status: ProposalStatus::Pending,
+                    created_at_unix_ms: ev.created_at_unix_ms,
+                    title: ev.title,
+                    why: ev.why,
+                    what: ev.what,
+                    where_: ev.where_,
+                    decided_at_unix_ms: None,
+                    decided_by: None,
+                    decision_reason: None,
+                    decision_outcome: None,
+                },
+            );
         }
-        for cid in source_chunks.iter() {
-            chunk.sources.push(ChunkSource::ChunkId(*cid));
+        "accept" | "reject" => {
+            let Some(proposal_id) = ev.proposal_id else {
+                return;
+            };
+            if let Some(s) = map.get_mut(&proposal_id) {
+                s.status = if action == "accept" {
+                    ProposalStatus::Accepted
+                } else {
+                    ProposalStatus::Rejected
+                };
+                s.decided_at_unix_ms = ev.created_at_unix_ms;
+                s.decided_by = ev.actor;
+                s.decision_reason = ev.reason;
+                s.decision_outcome = ev.outcome;
+            }
         }
-
-        let mut new_chunks = vec![chunk];
-        let assigned =
-            agentsdb_format::append_layer_atomic(path, &mut new_chunks).context("append chunk")?;
-        Ok(*assigned.first().unwrap_or(&0))
-    } else {
-        let dim = dim.context("creating a new layer requires dim")?;
-        let assigned = id.unwrap_or(1);
-        let mut chunk = ChunkInput {
-            id: assigned,
-            kind: kind.to_string(),
-            author: "web".to_string(),
-            confidence,
-            created_at_unix_ms: now_unix_ms(),
-            content: content.to_string(),
-            embedding: Vec::new(),
-            sources: Vec::new(),
-        };
-        chunk.embedding = hash_embed(&chunk.content, dim as usize);
-        if chunk.id == 0 {
-            chunk.id = 1;
-        }
-        let schema = agentsdb_format::LayerSchema {
-            dim: dim as u32,
-            element_type: agentsdb_format::EmbeddingElementType::F32,
-            quant_scale: 1.0,
-        };
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk]).context("create layer")?;
-        Ok(assigned)
+        _other => {}
     }
 }
 
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+fn read_proposal_events_from_layer(root: &Path) -> anyhow::Result<Vec<(u32, ProposalEvent)>> {
+    let path = root.join(PROPOSAL_EVENT_LAYER);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = LayerFile::open(&path).with_context(|| format!("open {}", path.display()))?;
+    let mut out = Vec::new();
+    for chunk in file.chunks() {
+        let chunk = chunk?;
+        if chunk.kind != PROPOSAL_EVENT_KIND {
+            continue;
+        }
+        let ev: ProposalEvent = serde_json::from_str(chunk.content)
+            .with_context(|| format!("parse proposal event chunk {}", chunk.id))?;
+        out.push((chunk.id, ev));
+    }
+    Ok(out)
+}
+
+fn infer_dim_for_root(root: &Path) -> anyhow::Result<u32> {
+    for name in [
+        "AGENTS.local.db",
+        "AGENTS.user.db",
+        "AGENTS.delta.db",
+        "AGENTS.db",
+    ] {
+        let path = root.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let file = LayerFile::open(&path).with_context(|| format!("open {}", path.display()))?;
+        return Ok(file.embedding_dim() as u32);
+    }
+    Ok(128)
+}
+
+fn append_proposal_event_chunk(
+    st: &mut ServerState,
+    record: serde_json::Value,
+    context_id: u32,
+) -> anyhow::Result<u32> {
+    let path = st.root.join(PROPOSAL_EVENT_LAYER);
+    let dim = if path.exists() {
+        None
+    } else {
+        Some(infer_dim_for_root(&st.root).context("infer dim for proposal layer")?)
+    };
+    let id = append_chunk(
+        &path,
+        "delta",
+        None,
+        PROPOSAL_EVENT_KIND,
+        &serde_json::to_string(&record).context("serialize proposal record")?,
+        1.0,
+        dim,
+        &[],
+        &[context_id],
+    )
+    .context("append proposal event chunk")?;
+    st.cache.remove(PROPOSAL_EVENT_LAYER);
+    Ok(id)
+}
+
+fn load_proposal_states(st: &mut ServerState) -> anyhow::Result<BTreeMap<u32, ProposalState>> {
+    let events = read_proposal_events_from_layer(&st.root)?;
+    let mut map: BTreeMap<u32, ProposalState> = BTreeMap::new();
+    for (event_id, ev) in events {
+        apply_proposal_event(&mut map, event_id, ev);
+    }
+    Ok(map)
+}
+
+fn list_proposals(st: &mut ServerState, include_all: bool) -> anyhow::Result<Vec<ProposalRow>> {
+    let states = load_proposal_states(st)?;
+    let mut layer_ids: HashMap<String, HashSet<u32>> = HashMap::new();
+    for file in [
+        "AGENTS.local.db",
+        "AGENTS.user.db",
+        "AGENTS.delta.db",
+        "AGENTS.db",
+    ] {
+        if st.root.join(file).exists() {
+            let cache = get_or_build_cache(st, file)?;
+            layer_ids.insert(
+                file.to_string(),
+                cache.summaries.iter().map(|c| c.id).collect(),
+            );
+        } else {
+            layer_ids.insert(file.to_string(), HashSet::new());
+        }
+    }
+
+    let mut out = Vec::new();
+    for s in states.values() {
+        if !include_all && !matches!(s.status, ProposalStatus::Pending) {
+            continue;
+        }
+        let from_ids = layer_ids.get(&s.from_path).cloned().unwrap_or_default();
+        let to_ids = layer_ids.get(&s.to_path).cloned().unwrap_or_default();
+        out.push(ProposalRow {
+            proposal_id: s.proposal_id,
+            context_id: s.context_id,
+            from_path: s.from_path.clone(),
+            to_path: s.to_path.clone(),
+            status: s.status.clone(),
+            created_at_unix_ms: s.created_at_unix_ms,
+            title: s.title.clone(),
+            why: s.why.clone(),
+            what: s.what.clone(),
+            where_: s.where_.clone(),
+            exists_in_delta: layer_ids
+                .get("AGENTS.delta.db")
+                .map(|ids| ids.contains(&s.context_id))
+                .unwrap_or(false),
+            exists_in_user: layer_ids
+                .get("AGENTS.user.db")
+                .map(|ids| ids.contains(&s.context_id))
+                .unwrap_or(false),
+            exists_in_source: from_ids.contains(&s.context_id),
+            exists_in_target: to_ids.contains(&s.context_id),
+            decided_at_unix_ms: s.decided_at_unix_ms,
+            decided_by: s.decided_by.clone(),
+            decision_reason: s.decision_reason.clone(),
+            decision_outcome: s.decision_outcome.clone(),
+        });
+    }
+    Ok(out)
+}
+
+fn record_proposal(st: &mut ServerState, input: ProposeInput) -> anyhow::Result<u32> {
+    let from_path = input
+        .from_path
+        .as_deref()
+        .unwrap_or("AGENTS.delta.db")
+        .to_string();
+    let to_path = input
+        .to_path
+        .as_deref()
+        .unwrap_or("AGENTS.user.db")
+        .to_string();
+
+    let is_allowed = match (from_path.as_str(), to_path.as_str()) {
+        ("AGENTS.local.db", "AGENTS.delta.db") => true,
+        ("AGENTS.local.db", "AGENTS.user.db") => true,
+        ("AGENTS.user.db", "AGENTS.delta.db") => true,
+        ("AGENTS.delta.db", "AGENTS.user.db") => true,
+        ("AGENTS.delta.db", "AGENTS.db") => true,
+        _ => false,
+    };
+    if !is_allowed {
+        anyhow::bail!(
+            "proposal flow not permitted (allowed: local->delta|user, user->delta, delta->user|base)"
+        );
+    }
+
+    let src_cache =
+        get_or_build_cache(st, &from_path).with_context(|| format!("open {from_path}"))?;
+    if src_cache.removed_ids.contains(&input.context_id) {
+        anyhow::bail!("cannot propose removed chunk id {}", input.context_id);
+    }
+    let exists = src_cache.summaries.iter().any(|c| c.id == input.context_id);
+    if !exists {
+        anyhow::bail!("chunk id {} not found in {}", input.context_id, from_path);
+    }
+
+    let record = serde_json::json!({
+        "action": "propose",
+        "context_id": input.context_id,
+        "from_path": from_path,
+        "to_path": to_path,
+        "created_at_unix_ms": agentsdb_ops::util::now_unix_ms(),
+        "actor": "web",
+        "title": input.title,
+        "why": input.why,
+        "what": input.what,
+        "where": input.where_,
+    });
+    let id = append_proposal_event_chunk(st, record, input.context_id)
+        .context("append proposal event chunk")?;
+    Ok(id)
+}
+
+fn reject_proposals(
+    st: &mut ServerState,
+    proposal_ids: &[u32],
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
+    if proposal_ids.is_empty() {
+        anyhow::bail!("ids must be non-empty");
+    }
+    let states = load_proposal_states(st)?;
+    for id in proposal_ids {
+        let Some(s) = states.get(id) else {
+            anyhow::bail!("proposal {id} not found");
+        };
+        if !matches!(s.status, ProposalStatus::Pending) {
+            anyhow::bail!("proposal {id} is not pending");
+        }
+    }
+    for id in proposal_ids {
+        let s = states.get(id).context("proposal missing")?;
+        let record = serde_json::json!({
+            "action": "reject",
+            "proposal_id": id,
+            "context_id": s.context_id,
+            "created_at_unix_ms": agentsdb_ops::util::now_unix_ms(),
+            "actor": "web",
+            "outcome": "rejected",
+            "reason": reason,
+        });
+        append_proposal_event_chunk(st, record, s.context_id).context("append reject event")?;
+    }
+    Ok(())
+}
+
+fn accept_proposals(
+    st: &mut ServerState,
+    proposal_ids: &[u32],
+    skip_existing: bool,
+) -> anyhow::Result<PromoteOut> {
+    if proposal_ids.is_empty() {
+        anyhow::bail!("ids must be non-empty");
+    }
+    let states = load_proposal_states(st)?;
+    for id in proposal_ids {
+        let Some(s) = states.get(id) else {
+            anyhow::bail!("proposal {id} not found");
+        };
+        if !matches!(s.status, ProposalStatus::Pending) {
+            anyhow::bail!("proposal {id} is not pending");
+        }
+        let is_allowed = match (s.from_path.as_str(), s.to_path.as_str()) {
+            ("AGENTS.local.db", "AGENTS.delta.db") => true,
+            ("AGENTS.local.db", "AGENTS.user.db") => true,
+            ("AGENTS.user.db", "AGENTS.delta.db") => true,
+            ("AGENTS.delta.db", "AGENTS.user.db") => true,
+            ("AGENTS.delta.db", "AGENTS.db") => true,
+            _ => false,
+        };
+        if !is_allowed {
+            anyhow::bail!("proposal {id} flow is not permitted");
+        }
+    }
+
+    let out = promote_from_to(st, &states, proposal_ids, skip_existing)?;
+    let promoted: HashSet<u32> = out.promoted.iter().copied().collect();
+    let skipped: HashSet<u32> = out.skipped.iter().copied().collect();
+
+    for id in proposal_ids {
+        let s = states.get(id).context("proposal missing")?;
+        let outcome = if promoted.contains(&s.context_id) {
+            "promoted"
+        } else if skipped.contains(&s.context_id) {
+            "skipped_existing"
+        } else {
+            "unknown"
+        };
+        let record = serde_json::json!({
+            "action": "accept",
+            "proposal_id": id,
+            "context_id": s.context_id,
+            "created_at_unix_ms": agentsdb_ops::util::now_unix_ms(),
+            "actor": "web",
+            "outcome": outcome,
+            "out_path": out.out_path.clone(),
+        });
+        append_proposal_event_chunk(st, record, s.context_id).context("append accept event")?;
+    }
+
+    Ok(out)
+}
+
+fn promote_from_to(
+    st: &mut ServerState,
+    states: &BTreeMap<u32, ProposalState>,
+    proposal_ids: &[u32],
+    skip_existing: bool,
+) -> anyhow::Result<PromoteOut> {
+    let mut promoted_all = Vec::new();
+    let mut skipped_all = Vec::new();
+    let mut out_path: Option<String> = None;
+
+    let mut by_pair: BTreeMap<(String, String), Vec<u32>> = BTreeMap::new();
+    for id in proposal_ids {
+        let s = states.get(id).context("proposal state missing")?;
+        by_pair
+            .entry((s.from_path.clone(), s.to_path.clone()))
+            .or_default()
+            .push(s.context_id);
+    }
+    for ((from_path, to_path), mut group_ids) in by_pair {
+        group_ids.sort_unstable();
+        group_ids.dedup();
+        let out = promote_layers(st, &from_path, &to_path, &group_ids, skip_existing)?;
+        promoted_all.extend(out.promoted);
+        skipped_all.extend(out.skipped);
+        if let Some(p) = out.out_path {
+            match out_path.as_deref() {
+                None => out_path = Some(p),
+                Some(existing) if existing == p => {}
+                Some(existing) => {
+                    anyhow::bail!("multiple promote output paths ({existing} vs {p})");
+                }
+            }
+        }
+    }
+
+    promoted_all.sort_unstable();
+    promoted_all.dedup();
+    skipped_all.sort_unstable();
+    skipped_all.dedup();
+
+    Ok(PromoteOut {
+        ok: true,
+        promoted: promoted_all,
+        skipped: skipped_all,
+        out_path,
+    })
+}
+
+fn promote_delta_to_user(
+    st: &mut ServerState,
+    ids: &[u32],
+    skip_existing: bool,
+) -> anyhow::Result<PromoteOut> {
+    let delta_path = st.root.join("AGENTS.delta.db");
+    let user_path = st.root.join("AGENTS.user.db");
+
+    let outcome = agentsdb_ops::promote::promote_chunks(
+        &delta_path.to_string_lossy(),
+        &user_path.to_string_lossy(),
+        ids,
+        skip_existing,
+        true, // tombstone_source
+    )?;
+
+    // Invalidate cache for modified layers
+    st.cache.remove("AGENTS.user.db");
+    st.cache.remove("AGENTS.delta.db");
+
+    Ok(PromoteOut {
+        ok: true,
+        promoted: outcome.promoted,
+        skipped: outcome.skipped,
+        out_path: None,
+    })
+}
+
+fn promote_layers(
+    st: &mut ServerState,
+    from_path: &str,
+    to_path: &str,
+    ids: &[u32],
+    skip_existing: bool,
+) -> anyhow::Result<PromoteOut> {
+    if to_path == "AGENTS.db" {
+        return promote_delta_to_base_new(st, ids, skip_existing);
+    }
+
+    let from_abs = resolve_layer_path(&st.root, from_path)?;
+    let to_abs_str = st.root.join(to_path).to_string_lossy().to_string();
+
+    let outcome = agentsdb_ops::promote::promote_chunks(
+        &from_abs.to_string_lossy(),
+        &to_abs_str,
+        ids,
+        skip_existing,
+        true, // tombstone_source
+    )?;
+
+    // Invalidate cache for modified layers
+    st.cache.remove(to_path);
+    st.cache.remove(from_path);
+
+    Ok(PromoteOut {
+        ok: true,
+        promoted: outcome.promoted,
+        skipped: outcome.skipped,
+        out_path: None,
+    })
+}
+
+fn chunks_equal(a: &agentsdb_format::ChunkInput, b: &agentsdb_format::ChunkInput) -> bool {
+    a.id == b.id
+        && a.kind == b.kind
+        && a.content == b.content
+        && a.author == b.author
+        && a.confidence.to_bits() == b.confidence.to_bits()
+        && a.created_at_unix_ms == b.created_at_unix_ms
+        && a.embedding.len() == b.embedding.len()
+        && a.embedding
+            .iter()
+            .zip(b.embedding.iter())
+            .all(|(x, y)| x.to_bits() == y.to_bits())
+        && sources_equal(&a.sources, &b.sources)
+}
+
+fn sources_equal(a: &[agentsdb_format::ChunkSource], b: &[agentsdb_format::ChunkSource]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (x, y) in a.iter().zip(b.iter()) {
+        match (x, y) {
+            (
+                agentsdb_format::ChunkSource::ChunkId(ax),
+                agentsdb_format::ChunkSource::ChunkId(by),
+            ) => {
+                if ax != by {
+                    return false;
+                }
+            }
+            (
+                agentsdb_format::ChunkSource::SourceString(ax),
+                agentsdb_format::ChunkSource::SourceString(by),
+            ) => {
+                if ax != by {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn promote_delta_to_base_new(
+    st: &mut ServerState,
+    ids: &[u32],
+    skip_existing: bool,
+) -> anyhow::Result<PromoteOut> {
+    let base_path = st.root.join("AGENTS.db");
+    let delta_path = st.root.join("AGENTS.delta.db");
+    if !base_path.exists() {
+        anyhow::bail!("AGENTS.db not found under root");
+    }
+    if !delta_path.exists() {
+        anyhow::bail!("AGENTS.delta.db not found under root");
+    }
+
+    let base_file = agentsdb_format::LayerFile::open(&base_path)
+        .with_context(|| format!("open {}", base_path.display()))?;
+    let base_schema = agentsdb_format::schema_of(&base_file);
+    let base_metadata = base_file.layer_metadata_bytes().map(|b| b.to_vec());
+    let mut by_id: BTreeMap<u32, agentsdb_format::ChunkInput> =
+        agentsdb_format::read_all_chunks(&base_file)?
+            .into_iter()
+            .map(|c| (c.id, c))
+            .collect();
+
+    let delta_file = agentsdb_format::LayerFile::open(&delta_path)
+        .with_context(|| format!("open {}", delta_path.display()))?;
+    let delta_schema = agentsdb_format::schema_of(&delta_file);
+    if delta_schema.dim != base_schema.dim
+        || delta_schema.element_type != base_schema.element_type
+        || delta_schema.quant_scale.to_bits() != base_schema.quant_scale.to_bits()
+    {
+        anyhow::bail!("schema mismatch between AGENTS.delta.db and AGENTS.db");
+    }
+    let delta_by_id: HashMap<u32, agentsdb_format::ChunkInput> =
+        agentsdb_format::read_all_chunks(&delta_file)?
+            .into_iter()
+            .map(|c| (c.id, c))
+            .collect();
+
+    let mut promoted = Vec::new();
+    let mut skipped = Vec::new();
+
+    for id in ids {
+        let Some(c) = delta_by_id.get(id) else {
+            anyhow::bail!("chunk id {id} not found in AGENTS.delta.db");
+        };
+        if c.kind == PROPOSAL_EVENT_KIND {
+            anyhow::bail!("cannot promote proposal event chunk id {id} into base");
+        }
+        if c.kind == TOMBSTONE_KIND {
+            anyhow::bail!("cannot promote tombstone chunk id {id} into base");
+        }
+        if let Some(existing) = by_id.get(id) {
+            if chunks_equal(existing, c) {
+                skipped.push(*id);
+                continue;
+            }
+            if skip_existing {
+                anyhow::bail!(
+                    "base already contains id {id} with different content (cannot skip conflicts)"
+                );
+            }
+            anyhow::bail!("base already contains id {id} with different content");
+        }
+        let mut c = c.clone();
+        if c.author != "human" {
+            c.author = "human".to_string();
+        }
+        by_id.insert(*id, c);
+        promoted.push(*id);
+    }
+
+    promoted.sort_unstable();
+    promoted.dedup();
+    skipped.sort_unstable();
+    skipped.dedup();
+    if promoted.is_empty() {
+        return Ok(PromoteOut {
+            ok: true,
+            promoted,
+            skipped,
+            out_path: None,
+        });
+    }
+
+    let out_path = st.root.join("AGENTS.db.new");
+    let mut chunks: Vec<agentsdb_format::ChunkInput> = by_id.into_values().collect();
+    chunks.sort_by_key(|c| c.id);
+    agentsdb_format::write_layer_atomic(&out_path, &base_schema, &chunks, base_metadata.as_deref())
+        .context("write AGENTS.db.new")?;
+
+    Ok(PromoteOut {
+        ok: true,
+        promoted,
+        skipped,
+        out_path: Some(out_path.to_string_lossy().into_owned()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentsdb_embeddings::embedder::{EmbeddingProfile, OutputNorm};
+    use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
+
+    fn write_layer_with_custom_profile(path: &Path, dim: u32, output_norm: OutputNorm) {
+        let schema = agentsdb_format::LayerSchema {
+            dim,
+            element_type: agentsdb_format::EmbeddingElementType::F32,
+            quant_scale: 1.0,
+        };
+        let profile = EmbeddingProfile {
+            backend: "hash".to_string(),
+            model: None,
+            revision: None,
+            dim: dim as usize,
+            output_norm,
+        };
+        let metadata = LayerMetadataV1::new(profile)
+            .to_json_bytes()
+            .expect("metadata json");
+        let chunk = agentsdb_format::ChunkInput {
+            id: 1,
+            kind: "note".to_string(),
+            content: "seed".to_string(),
+            author: "human".to_string(),
+            confidence: 1.0,
+            created_at_unix_ms: 0,
+            embedding: vec![0.0; dim as usize],
+            sources: Vec::new(),
+        };
+        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&metadata))
+            .expect("write layer");
+    }
+
+    #[test]
+    fn web_write_rejects_embedder_profile_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("AGENTS.local.db");
+        write_layer_with_custom_profile(&path, 8, OutputNorm::L2);
+
+        let err = append_chunk(&path, "local", None, "note", "hello", 1.0, None, &[], &[])
+            .expect_err("expected mismatch error");
+        assert!(
+            err.to_string().contains("embedder profile mismatch"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn web_promote_copies_delta_to_user_and_records_ids() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+
+        let delta = root.join("AGENTS.delta.db");
+        write_layer_with_custom_profile(&delta, 8, OutputNorm::None);
+
+        // Add a second chunk with a stable id to promote.
+        let _ = append_chunk(
+            &delta,
+            "delta",
+            Some(9),
+            "note",
+            "promote me",
+            0.9,
+            None,
+            &[],
+            &[],
+        )
+        .expect("append delta chunk");
+
+        let mut st = ServerState::new(root.to_path_buf());
+        let out = promote_delta_to_user(&mut st, &[9], false).expect("promote");
+        assert_eq!(out.promoted, vec![9]);
+        assert!(root.join("AGENTS.user.db").exists());
+    }
+
+    #[test]
+    fn web_proposal_states_ignore_missing_layer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut st = ServerState::new(dir.path().to_path_buf());
+        let states = load_proposal_states(&mut st).expect("load states");
+        assert!(states.is_empty());
+    }
 }

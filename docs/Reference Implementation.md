@@ -124,9 +124,9 @@ Goals:
 Work items:
 - Implement “collect” step: discover input sources (start with `AGENTS.md` and a configurable include list).
 - Implement chunking: deterministic chunk boundaries and stable `id` assignment.
-- Compute embeddings (v0.1 options):
-  - Option A: pluggable embedder interface with a local embedding backend.
-  - Option B: “import embeddings” mode for offline/CI embedding generation.
+- Compute embeddings:
+  - Implemented: pluggable embedder interface + deterministic `hash` default, with feature-gated local/remote backends (`crates/agentsdb-embeddings/`).
+  - Implemented: options roll-up from `options` records in standard layers (`local > user > delta > base`) and layer-level embedding metadata (see `docs/RFC.md`).
 - Produce a complete base layer file following the RFC binary structs.
 
 Acceptance criteria:
@@ -148,7 +148,7 @@ Work items:
   - Append to the corresponding layer.
   - Return assigned `context_id` (chunk id).
 - Implement `agents_context_propose`:
-  - Record a promotion request (v0.1: append a “proposal” record to delta or a sidecar log).
+  - Record a promotion request by appending a `meta.proposal_event` chunk to `AGENTS.delta.db` (no sidecar files).
   - Enforce `target: user`.
 
 Acceptance criteria:

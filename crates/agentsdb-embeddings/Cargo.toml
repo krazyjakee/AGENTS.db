@@ -1,0 +1,46 @@
+[package]
+name = "agentsdb-embeddings"
+version = "0.1.6"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Local embedders (heavy dependencies; opt-in).
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
+ort = ["dep:fastembed", "dep:hf-hub"]
+# Remote providers (opt-in; require network at runtime).
+openai = ["dep:ureq"]
+voyage = ["dep:ureq"]
+cohere = ["dep:ureq"]
+anthropic = ["dep:ureq"]
+bedrock = ["dep:ureq", "dep:hmac", "dep:sha2", "dep:hex", "dep:time"]
+gemini = ["dep:ureq"]
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+agentsdb-core = { path = "../agentsdb-core" }
+agentsdb-format = { path = "../agentsdb-format" }
+
+fastembed = { version = "4.9.1", optional = true, default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries"] }
+hf-hub = { version = "0.4.3", optional = true, default-features = false, features = ["native-tls", "ureq"] }
+ureq = { version = "2", optional = true, features = ["json"] }
+
+candle-core = { version = "0.9.1", optional = true }
+candle-nn = { version = "0.9.1", optional = true }
+candle-transformers = { version = "0.9.1", optional = true }
+tokenizers = { version = "0.21.0", optional = true }
+
+# AWS Signature V4 for Bedrock
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+time = { version = "0.3", optional = true, features = ["formatting", "macros"] }
+
+[dev-dependencies]
+tempfile = "3.10"

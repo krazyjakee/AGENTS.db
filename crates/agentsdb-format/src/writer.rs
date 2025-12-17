@@ -11,6 +11,9 @@ const SECTION_STRING_DICTIONARY: u32 = 1;
 const SECTION_CHUNK_TABLE: u32 = 2;
 const SECTION_EMBEDDING_MATRIX: u32 = 3;
 const SECTION_RELATIONSHIPS: u32 = 4;
+const SECTION_LAYER_METADATA: u32 = 5;
+
+const LAYER_METADATA_FORMAT_JSON: u32 = 1;
 
 const REL_SOURCE_CHUNK_ID: u32 = 1;
 const REL_SOURCE_STRING: u32 = 2;
@@ -52,22 +55,28 @@ pub fn write_layer_atomic(
     path: impl AsRef<Path>,
     schema: &LayerSchema,
     chunks: &[ChunkInput],
+    layer_metadata_json: Option<&[u8]>,
 ) -> Result<(), Error> {
-    let bytes = encode_layer(schema, chunks)?;
+    let bytes = encode_layer(schema, chunks, layer_metadata_json)?;
     atomic_write(path.as_ref(), &bytes)
 }
 
 pub fn append_layer_atomic(
     path: impl AsRef<Path>,
     new_chunks: &mut [ChunkInput],
+    layer_metadata_json: Option<&[u8]>,
 ) -> Result<Vec<u32>, Error> {
     let path = path.as_ref();
     let file = LayerFile::open(path)?;
     let schema = schema_of(&file);
     let mut all_chunks = decode_all_chunks(&file)?;
+    let existing_metadata = file.layer_metadata_bytes().map(|b| b.to_vec());
+    let metadata_to_write = layer_metadata_json
+        .map(|b| b.to_vec())
+        .or(existing_metadata);
 
-    let mut used: HashSet<u32> = all_chunks.iter().map(|c| c.id).collect();
-    let mut next_id = used
+    let mut used_ids: HashSet<u32> = all_chunks.iter().map(|c| c.id).collect();
+    let mut next_id = used_ids
         .iter()
         .copied()
         .max()
@@ -78,50 +87,64 @@ pub fn append_layer_atomic(
     let mut assigned = Vec::with_capacity(new_chunks.len());
     for c in new_chunks.iter_mut() {
         if c.id == 0 {
-            while used.contains(&next_id) {
+            while used_ids.contains(&next_id) {
                 next_id = next_id.saturating_add(1);
             }
             c.id = next_id;
+            used_ids.insert(c.id);
             next_id = next_id.saturating_add(1);
+        } else {
+            used_ids.insert(c.id);
         }
-        if c.id == 0 || used.contains(&c.id) {
+        if c.id == 0 {
             return Err(FormatError::InvalidValue {
                 field: "ChunkRecord.id",
-                reason: "must be non-zero and unique",
+                reason: "must be non-zero",
             }
             .into());
         }
-        used.insert(c.id);
         assigned.push(c.id);
         all_chunks.push(c.clone());
     }
 
-    let bytes = encode_layer(&schema, &all_chunks)?;
+    let bytes = encode_layer(&schema, &all_chunks, metadata_to_write.as_deref())?;
     atomic_write(path, &bytes)?;
     Ok(assigned)
 }
 
 pub fn ensure_writable_layer_path(path: impl AsRef<Path>) -> Result<(), Error> {
-    ensure_writable_layer_path_inner(path.as_ref(), false)
+    ensure_writable_layer_path_inner(path.as_ref(), false, false)
 }
 
 pub fn ensure_writable_layer_path_allow_user(path: impl AsRef<Path>) -> Result<(), Error> {
-    ensure_writable_layer_path_inner(path.as_ref(), true)
+    ensure_writable_layer_path_inner(path.as_ref(), true, false)
+}
+
+pub fn ensure_writable_layer_path_allow_base(path: impl AsRef<Path>) -> Result<(), Error> {
+    // Escape hatch: allow writing to AGENTS.db when explicitly requested by the caller.
+    ensure_writable_layer_path_inner(path.as_ref(), true, true)
 }
 
 pub fn read_all_chunks(file: &LayerFile) -> Result<Vec<ChunkInput>, Error> {
     decode_all_chunks(file)
 }
 
-fn ensure_writable_layer_path_inner(path: &Path, allow_user: bool) -> Result<(), Error> {
+fn ensure_writable_layer_path_inner(
+    path: &Path,
+    allow_user: bool,
+    allow_base: bool,
+) -> Result<(), Error> {
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    let forbidden = if allow_user {
-        ["AGENTS.db"].as_slice()
-    } else {
-        ["AGENTS.db", "AGENTS.user.db"].as_slice()
+    let forbidden = match (allow_user, allow_base) {
+        // Default: only local/delta allowed.
+        (false, _) => ["AGENTS.db", "AGENTS.user.db"].as_slice(),
+        // User allowed, but base still protected.
+        (true, false) => ["AGENTS.db"].as_slice(),
+        // Escape hatch: allow base + user.
+        (true, true) => [].as_slice(),
     };
     if forbidden.contains(&name) {
         return Err(PermissionError::WriteNotPermitted {
@@ -162,7 +185,11 @@ fn decode_all_chunks(file: &LayerFile) -> Result<Vec<ChunkInput>, Error> {
     Ok(out)
 }
 
-fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, Error> {
+fn encode_layer(
+    schema: &LayerSchema,
+    chunks: &[ChunkInput],
+    layer_metadata_json: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
     if schema.dim == 0 {
         return Err(FormatError::InvalidValue {
             field: "EmbeddingMatrixHeaderV1.dim",
@@ -172,12 +199,11 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
     }
     let dim = schema.dim as usize;
 
-    let mut seen_ids = HashSet::with_capacity(chunks.len().min(1024));
     for c in chunks {
-        if c.id == 0 || !seen_ids.insert(c.id) {
+        if c.id == 0 {
             return Err(FormatError::InvalidValue {
                 field: "ChunkRecord.id",
-                reason: "must be non-zero and unique",
+                reason: "must be non-zero",
             }
             .into());
         }
@@ -206,6 +232,7 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
 
     // Determine whether to include relationships.
     let include_relationships = chunks.iter().any(|c| !c.sources.is_empty());
+    let include_layer_metadata = layer_metadata_json.is_some();
 
     // Intern strings in deterministic first-seen order.
     let mut strings: Vec<String> = Vec::new();
@@ -268,7 +295,13 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
 
     // Layout.
     let header_len = 40u64;
-    let section_count = if include_relationships { 4u64 } else { 3u64 };
+    let mut section_count = 3u64;
+    if include_relationships {
+        section_count += 1;
+    }
+    if include_layer_metadata {
+        section_count += 1;
+    }
     let section_table_len = section_count * 24u64;
 
     let string_header_size = 32u64;
@@ -297,19 +330,30 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
     let rel_records_size = (rel_records.len() as u64) * 8u64;
     let rel_section_len = rel_header_size + rel_records_size;
 
+    let layer_metadata_header_size = 24u64;
+    let layer_metadata_len = layer_metadata_json.map(|b| b.len() as u64).unwrap_or(0);
+    let layer_metadata_section_len = layer_metadata_header_size + layer_metadata_len;
+
     let string_section_off = header_len + section_table_len;
     let chunk_section_off = string_section_off + string_section_len;
-    let (rel_section_off, embed_section_off, file_len) = if include_relationships {
-        let rel_off = chunk_section_off + chunk_section_len;
-        let embed_off = rel_off + rel_section_len;
-        (Some(rel_off), embed_off, embed_off + embed_section_len)
+    let layer_metadata_section_off = if include_layer_metadata {
+        Some(chunk_section_off + chunk_section_len)
     } else {
-        (
-            None,
-            chunk_section_off + chunk_section_len,
-            (chunk_section_off + chunk_section_len) + embed_section_len,
-        )
+        None
     };
+    let after_meta = layer_metadata_section_off
+        .map(|off| off + layer_metadata_section_len)
+        .unwrap_or(chunk_section_off + chunk_section_len);
+    let rel_section_off = if include_relationships {
+        Some(after_meta)
+    } else {
+        None
+    };
+    let after_rel = rel_section_off
+        .map(|off| off + rel_section_len)
+        .unwrap_or(after_meta);
+    let embed_section_off = after_rel;
+    let file_len = embed_section_off + embed_section_len;
 
     let mut buf = vec![0u8; file_len as usize];
 
@@ -336,6 +380,13 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
     put_u64(&mut buf, sec + 8, chunk_section_off);
     put_u64(&mut buf, sec + 16, chunk_section_len);
     sec += 24;
+    if let Some(meta_off) = layer_metadata_section_off {
+        put_u32(&mut buf, sec, SECTION_LAYER_METADATA);
+        put_u32(&mut buf, sec + 4, 0);
+        put_u64(&mut buf, sec + 8, meta_off);
+        put_u64(&mut buf, sec + 16, layer_metadata_section_len);
+        sec += 24;
+    }
     if let Some(rel_off) = rel_section_off {
         put_u32(&mut buf, sec, SECTION_RELATIONSHIPS);
         put_u32(&mut buf, sec + 4, 0);
@@ -382,6 +433,16 @@ fn encode_layer(schema: &LayerSchema, chunks: &[ChunkInput]) -> Result<Vec<u8>, 
             put_u32(&mut buf, off, *kind);
             put_u32(&mut buf, off + 4, *value);
         }
+    }
+
+    // Layer metadata (optional)
+    if let (Some(meta_off), Some(meta_bytes)) = (layer_metadata_section_off, layer_metadata_json) {
+        let blob_off = meta_off + layer_metadata_header_size;
+        put_u32(&mut buf, meta_off as usize, 1);
+        put_u32(&mut buf, meta_off as usize + 4, LAYER_METADATA_FORMAT_JSON);
+        put_u64(&mut buf, meta_off as usize + 8, blob_off);
+        put_u64(&mut buf, meta_off as usize + 16, meta_bytes.len() as u64);
+        buf[blob_off as usize..(blob_off as usize + meta_bytes.len())].copy_from_slice(meta_bytes);
     }
 
     // Chunk table
@@ -548,10 +609,75 @@ mod tests {
             sources: vec![ChunkSource::SourceString("file:1".to_string())],
         }];
 
-        write_layer_atomic(&path, &schema, &chunks).unwrap();
+        write_layer_atomic(&path, &schema, &chunks, None).unwrap();
         let opened = LayerFile::open(&path).unwrap();
         assert_eq!(opened.chunk_count, 1);
         assert_eq!(opened.embedding_matrix.dim, 2);
         assert_eq!(opened.relationship_count, Some(1));
+    }
+
+    #[test]
+    fn layer_metadata_roundtrips_and_is_preserved_on_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AGENTS.delta.db");
+
+        let schema = LayerSchema {
+            dim: 2,
+            element_type: EmbeddingElementType::F32,
+            quant_scale: 1.0,
+        };
+        let chunks = vec![ChunkInput {
+            id: 1,
+            kind: "note".to_string(),
+            content: "hello".to_string(),
+            author: "mcp".to_string(),
+            confidence: 0.9,
+            created_at_unix_ms: 0,
+            embedding: vec![0.0, 1.0],
+            sources: vec![],
+        }];
+
+        let meta1 = br#"{"v":1,"x":"y"}"#;
+        write_layer_atomic(&path, &schema, &chunks, Some(meta1)).unwrap();
+        let opened = LayerFile::open(&path).unwrap();
+        assert_eq!(
+            opened.layer_metadata_json().unwrap().unwrap(),
+            r#"{"v":1,"x":"y"}"#
+        );
+
+        let mut new_chunks = vec![ChunkInput {
+            id: 0,
+            kind: "note".to_string(),
+            content: "world".to_string(),
+            author: "mcp".to_string(),
+            confidence: 0.9,
+            created_at_unix_ms: 0,
+            embedding: vec![1.0, 0.0],
+            sources: vec![],
+        }];
+        append_layer_atomic(&path, &mut new_chunks, None).unwrap();
+        let reopened = LayerFile::open(&path).unwrap();
+        assert_eq!(
+            reopened.layer_metadata_json().unwrap().unwrap(),
+            r#"{"v":1,"x":"y"}"#
+        );
+
+        let meta2 = br#"{"v":1,"x":"z"}"#;
+        let mut another = vec![ChunkInput {
+            id: 0,
+            kind: "note".to_string(),
+            content: "again".to_string(),
+            author: "mcp".to_string(),
+            confidence: 0.9,
+            created_at_unix_ms: 0,
+            embedding: vec![0.5, 0.5],
+            sources: vec![],
+        }];
+        append_layer_atomic(&path, &mut another, Some(meta2)).unwrap();
+        let reopened = LayerFile::open(&path).unwrap();
+        assert_eq!(
+            reopened.layer_metadata_json().unwrap().unwrap(),
+            r#"{"v":1,"x":"z"}"#
+        );
     }
 }

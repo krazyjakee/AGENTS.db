@@ -55,7 +55,8 @@ pub(crate) fn cmd_compact(
         .context("refuse to write compacted output to a non-writable layer path")?;
 
     let (schema, chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
-    agentsdb_format::write_layer_atomic(&out, &schema, &chunks).context("write compacted layer")?;
+    agentsdb_format::write_layer_atomic(&out, &schema, &chunks, None)
+        .context("write compacted layer")?;
 
     if json {
         #[derive(Serialize)]
@@ -108,14 +109,14 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
             continue;
         }
 
-        let Ok(file) = agentsdb_format::LayerFile::open(&path) else {
+        let Ok(file) = agentsdb_format::LayerFile::open_lenient(&path) else {
             continue;
         };
 
         let schema = agentsdb_format::schema_of(&file);
         let chunks = agentsdb_format::read_all_chunks(&file)
             .with_context(|| format!("read chunks from {}", path.display()))?;
-        agentsdb_format::write_layer_atomic(&path, &schema, &chunks)
+        agentsdb_format::write_layer_atomic(&path, &schema, &chunks, None)
             .with_context(|| format!("rewrite {}", path.display()))?;
         compacted.push(path);
     }
@@ -149,7 +150,7 @@ fn compact_layers(
 
     for (layer_name, path) in [("base", base), ("user", user)] {
         let Some(path) = path else { continue };
-        let file = agentsdb_format::LayerFile::open(path)
+        let file = agentsdb_format::LayerFile::open_lenient(path)
             .with_context(|| format!("open {layer_name} layer {path}"))?;
         let layer_schema = agentsdb_format::schema_of(&file);
         if let Some(s) = &schema {
@@ -172,15 +173,9 @@ fn compact_layers(
         }
 
         for c in agentsdb_format::read_all_chunks(&file)? {
-            if let Some(existing) = by_id.get(&c.id) {
-                if !chunks_equal(existing, &c) {
-                    anyhow::bail!(
-                        "id conflict during compaction: chunk id {} differs between layers",
-                        c.id
-                    );
-                }
-                continue;
-            }
+            // When duplicates exist (either within a file or across layers),
+            // always keep the newest entry (last occurrence).
+            // This allows compact to fix corrupted files with duplicate IDs.
             by_id.insert(c.id, c);
         }
     }
@@ -203,49 +198,6 @@ fn ensure_nonzero_unique_ids(chunks: &[agentsdb_format::ChunkInput]) -> anyhow::
         }
     }
     Ok(())
-}
-
-fn chunks_equal(a: &agentsdb_format::ChunkInput, b: &agentsdb_format::ChunkInput) -> bool {
-    a.id == b.id
-        && a.kind == b.kind
-        && a.content == b.content
-        && a.author == b.author
-        && a.confidence.to_bits() == b.confidence.to_bits()
-        && a.created_at_unix_ms == b.created_at_unix_ms
-        && a.embedding.len() == b.embedding.len()
-        && a.embedding
-            .iter()
-            .zip(b.embedding.iter())
-            .all(|(x, y)| x.to_bits() == y.to_bits())
-        && sources_equal(&a.sources, &b.sources)
-}
-
-fn sources_equal(a: &[agentsdb_format::ChunkSource], b: &[agentsdb_format::ChunkSource]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    for (x, y) in a.iter().zip(b.iter()) {
-        match (x, y) {
-            (
-                agentsdb_format::ChunkSource::ChunkId(ax),
-                agentsdb_format::ChunkSource::ChunkId(by),
-            ) => {
-                if ax != by {
-                    return false;
-                }
-            }
-            (
-                agentsdb_format::ChunkSource::SourceString(ax),
-                agentsdb_format::ChunkSource::SourceString(by),
-            ) => {
-                if ax != by {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    true
 }
 
 fn apply_default_layer_paths(
@@ -313,10 +265,16 @@ mod tests {
                 chunk(1, "canonical", "base a"),
                 chunk(2, "canonical", "base b"),
             ],
+            None,
         )
         .unwrap();
-        agentsdb_format::write_layer_atomic(&user_path, &schema(), &[chunk(100, "note", "user x")])
-            .unwrap();
+        agentsdb_format::write_layer_atomic(
+            &user_path,
+            &schema(),
+            &[chunk(100, "note", "user x")],
+            None,
+        )
+        .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
@@ -335,21 +293,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_ids_with_different_contents() {
+    fn keeps_newest_when_ids_conflict() {
         let dir = crate::util::make_temp_dir();
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
 
-        agentsdb_format::write_layer_atomic(&base_path, &schema(), &[chunk(1, "canonical", "a")])
-            .unwrap();
-        agentsdb_format::write_layer_atomic(&user_path, &schema(), &[chunk(1, "note", "b")])
-            .unwrap();
+        agentsdb_format::write_layer_atomic(
+            &base_path,
+            &schema(),
+            &[chunk(1, "canonical", "old content")],
+            None,
+        )
+        .unwrap();
+        agentsdb_format::write_layer_atomic(
+            &user_path,
+            &schema(),
+            &[chunk(1, "canonical", "new content")],
+            None,
+        )
+        .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
-        let err = compact_layers(Some(&base_s), Some(&user_s)).unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(msg.contains("id conflict"), "unexpected error: {msg}");
+        let (_, chunks) = compact_layers(Some(&base_s), Some(&user_s)).unwrap();
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].id, 1);
+        assert_eq!(chunks[0].content, "new content");
     }
 
     #[test]
@@ -360,9 +330,15 @@ mod tests {
         let junk_path = dir.join("junk.db");
         let other_path = dir.join("notes.txt");
 
-        agentsdb_format::write_layer_atomic(&a_path, &schema(), &[chunk(1, "canonical", "a")])
+        agentsdb_format::write_layer_atomic(
+            &a_path,
+            &schema(),
+            &[chunk(1, "canonical", "a")],
+            None,
+        )
+        .unwrap();
+        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")], None)
             .unwrap();
-        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")]).unwrap();
         std::fs::write(&junk_path, b"not an agentsdb layer").unwrap();
         std::fs::write(&other_path, b"ignore").unwrap();
 

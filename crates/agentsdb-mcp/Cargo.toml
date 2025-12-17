@@ -1,13 +1,26 @@
 [package]
 name = "agentsdb-mcp"
-version = "0.1.3"
+version = "0.1.6"
 edition = "2021"
 license = "MIT"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+candle = ["agentsdb-embeddings/candle"]
+ort = ["agentsdb-embeddings/ort"]
+openai = ["agentsdb-embeddings/openai"]
+voyage = ["agentsdb-embeddings/voyage"]
+cohere = ["agentsdb-embeddings/cohere"]
+all-embedders = ["candle", "ort", "openai", "voyage", "cohere"]
 
 [dependencies]
 agentsdb-core = { path = "../agentsdb-core", features = ["serde"] }
 agentsdb-format = { path = "../agentsdb-format" }
 agentsdb-query = { path = "../agentsdb-query" }
+agentsdb-embeddings = { path = "../agentsdb-embeddings" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

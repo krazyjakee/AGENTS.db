@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use agentsdb_core::types::LayerId;
 
 pub(crate) fn layer_to_str(layer: LayerId) -> &'static str {
+    // Converts a `LayerId` enum variant into its corresponding string representation.
+    //
+    // This is used for displaying layer identifiers in a human-readable format.
     match layer {
         LayerId::Base => "base",
         LayerId::User => "user",
@@ -17,6 +20,9 @@ pub(crate) fn layer_to_str(layer: LayerId) -> &'static str {
 }
 
 pub(crate) fn source_to_string(s: agentsdb_core::types::ProvenanceRef) -> String {
+    // Converts a `ProvenanceRef` into a human-readable string.
+    //
+    // This function formats chunk IDs as `chunk:<id>` and source strings as-is.
     match s {
         agentsdb_core::types::ProvenanceRef::ChunkId(id) => format!("chunk:{}", id.get()),
         agentsdb_core::types::ProvenanceRef::SourceString(v) => v,
@@ -24,6 +30,9 @@ pub(crate) fn source_to_string(s: agentsdb_core::types::ProvenanceRef) -> String
 }
 
 pub(crate) fn parse_vec_json(s: &str) -> anyhow::Result<Vec<f32>> {
+    // Parses a JSON string into a vector of f32, ensuring it's non-empty.
+    //
+    // This function is used for parsing embedding vectors provided as JSON arrays.
     let v: Vec<f32> =
         serde_json::from_str(s).context("parse query vector JSON (expected [f32,...])")?;
     if v.is_empty() {
@@ -33,6 +42,9 @@ pub(crate) fn parse_vec_json(s: &str) -> anyhow::Result<Vec<f32>> {
 }
 
 pub(crate) fn parse_ids_csv(s: &str) -> anyhow::Result<Vec<u32>> {
+    // Parses a comma-separated string of unsigned 32-bit integers into a sorted, deduplicated vector.
+    //
+    // This function is used for parsing lists of chunk IDs from CLI arguments.
     let mut out = Vec::new();
     for part in s.split(',') {
         let part = part.trim();
@@ -50,6 +62,9 @@ pub(crate) fn parse_ids_csv(s: &str) -> anyhow::Result<Vec<u32>> {
     Ok(out)
 }
 
+/// Collects files from a given root directory that match a list of include patterns.
+///
+/// This function recursively traverses `root` and collects paths that match `includes`.
 pub(crate) fn collect_files(root: &Path, includes: &[String]) -> anyhow::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     visit_dir(root, root, includes, &mut out)?;
@@ -57,6 +72,10 @@ pub(crate) fn collect_files(root: &Path, includes: &[String]) -> anyhow::Result<
     Ok(out)
 }
 
+/// Collects a wide range of common documentation files from a given root directory.
+///
+/// This function recursively traverses `root` and collects paths that are considered
+/// documentation candidates, while skipping common build/dependency directories.
 pub(crate) fn collect_files_wide_docs(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     visit_dir_wide_docs(root, root, &mut out)?;
@@ -75,11 +94,9 @@ fn visit_dir_wide_docs(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyho
                 continue;
             }
             visit_dir_wide_docs(root, &path, out)?;
-        } else if ty.is_file() {
-            if is_doc_candidate(&path) {
-                let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-                out.push(rel);
-            }
+        } else if ty.is_file() && is_doc_candidate(&path) {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            out.push(rel);
         }
     }
     Ok(())
@@ -166,6 +183,10 @@ fn visit_dir(
 }
 
 pub(crate) fn assign_stable_id(path: &Path, content: &str, used: &mut BTreeSet<u32>) -> u32 {
+    // Assigns a stable, unique ID to a chunk based on its path and content.
+    //
+    // This function uses a hash of the path and content to generate an ID, and ensures
+    // uniqueness by incrementing if the ID is already in use or is zero.
     let mut h = fnv1a32(path.to_string_lossy().as_bytes());
     h ^= fnv1a32(content.as_bytes());
     let mut id = if h == 0 { 1 } else { h };
@@ -191,6 +212,7 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
 }
 
 pub(crate) fn one_line(s: &str) -> String {
+    // Converts a multi-line string into a single line, replacing newlines with spaces and removing control characters.
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         if ch == '\n' || ch == '\r' {
@@ -204,6 +226,7 @@ pub(crate) fn one_line(s: &str) -> String {
     out
 }
 
+/// Formats an unsigned 64-bit integer with comma separators for thousands.
 pub(crate) fn fmt_u64_commas(mut v: u64) -> String {
     if v == 0 {
         return "0".to_string();
@@ -224,6 +247,7 @@ pub(crate) fn fmt_u64_commas(mut v: u64) -> String {
     out
 }
 
+/// Formats a byte count into a human-readable string with appropriate units (B, KiB, MiB, etc.).
 pub(crate) fn fmt_bytes_human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;

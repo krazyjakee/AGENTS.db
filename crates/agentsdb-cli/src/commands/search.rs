@@ -1,8 +1,7 @@
 use anyhow::Context;
 
-use agentsdb_core::embed::hash_embed;
-use agentsdb_core::types::SearchFilters;
-use agentsdb_query::{LayerSet, SearchQuery};
+use agentsdb_ops::{search_layers, SearchConfig};
+use agentsdb_query::LayerSet;
 
 use crate::types::{SearchJson, SearchResultJson};
 use crate::util::{layer_to_str, one_line, parse_vec_json, source_to_string};
@@ -14,45 +13,49 @@ pub(crate) fn cmd_search(
     query_vec_file: Option<String>,
     k: usize,
     kinds: Vec<String>,
+    use_index: bool,
     json: bool,
 ) -> anyhow::Result<()> {
-    let opened = layers.open().context("open layers")?;
-    if opened.is_empty() {
-        anyhow::bail!("no layers provided (use --base/--user/--delta/--local)");
-    }
+    // Implements the `search` command, which searches one or more layers using vector similarity.
+    //
+    // This function handles parsing query input (text, vector, or vector file), embedding the query,
+    // and performing the search across specified layers with optional filtering and index usage.
 
-    let dim = opened[0].1.embedding_dim();
-    let embedding = match (query, query_vec, query_vec_file) {
-        (Some(q), None, None) => {
-            if q.trim().is_empty() {
-                anyhow::bail!("--query must be non-empty");
-            }
-            hash_embed(&q, dim)
-        }
-        (None, Some(v), None) => parse_vec_json(&v)?,
-        (None, None, Some(path)) => {
+    // Parse query_vec from JSON string or file if provided
+    let query_vec_parsed = match (query_vec, query_vec_file) {
+        (Some(v), None) => Some(parse_vec_json(&v)?),
+        (None, Some(path)) => {
             let s = std::fs::read_to_string(&path).with_context(|| format!("read {path}"))?;
-            parse_vec_json(&s)?
+            Some(parse_vec_json(&s)?)
         }
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (None, Some(_), Some(_)) => {
-            anyhow::bail!("provide only one of --query, --query-vec, or --query-vec-file")
+        (Some(_), Some(_)) => {
+            anyhow::bail!("provide only one of --query-vec or --query-vec-file")
         }
-        (None, None, None) => {
-            anyhow::bail!("missing query (use --query or --query-vec/--query-vec-file)")
-        }
+        (None, None) => None,
     };
 
-    let query = SearchQuery {
-        embedding: embedding.clone(),
+    // Use shared search operation
+    let config = SearchConfig {
+        query,
+        query_vec: query_vec_parsed,
         k,
-        filters: SearchFilters { kinds },
+        kinds,
+        use_index,
     };
 
-    let results = agentsdb_query::search_layers(&opened, &query).context("search")?;
+    let results = search_layers(&layers, config).context("search")?;
 
     if json {
+        // Get dimension from layers for JSON output
+        let opened = layers.open().context("open layers for dimension")?;
+        let query_dim = if !opened.is_empty() {
+            opened[0].1.embedding_dim()
+        } else {
+            0
+        };
+
         let out = SearchJson {
-            query_dim: embedding.len(),
+            query_dim,
             k,
             results: results.into_iter().map(to_search_json).collect(),
         };

@@ -14,7 +14,9 @@
         <img class="logo" src="/logo.png" alt="AGENTS.db logo">
         <div>
           <div class="brandTitle mono">AGENTS.db</div>
-          <div class="brandSub">Web interface</div>
+          <div class="brandSub">
+            Web interface <span id="webVersion" class="pill mono" title="Web UI version">v…</span>
+          </div>
         </div>
       </div>
       <div class="grow"></div>
@@ -69,10 +71,7 @@
         </div>
         <div id="addPanel" style="display:none; margin-top:10px">
           <label>Scope (writes only)</label>
-          <select id="addScope">
-            <option value="local">local (AGENTS.local.db)</option>
-            <option value="delta">delta (AGENTS.delta.db)</option>
-          </select>
+          <select id="addScope"></select>
           <label>Kind</label>
           <input id="addKind" value="note">
           <label>Confidence</label>
@@ -96,6 +95,53 @@
           </div>
           <div class="muted" style="margin-top:6px">
             Writes are restricted to AGENTS.local.db / AGENTS.delta.db under the selected root.
+          </div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+        <div class="row" style="align-items:flex-end">
+          <div>
+            <label>Export</label>
+            <div class="row">
+              <select id="exportFormat">
+                <option value="json">json</option>
+                <option value="ndjson">ndjson</option>
+              </select>
+              <select id="exportRedact">
+                <option value="none">redact: none</option>
+                <option value="embeddings">redact: embeddings</option>
+                <option value="content">redact: content</option>
+                <option value="all">redact: all</option>
+              </select>
+              <button id="exportBtn" class="icon secondary" title="Export selected layer" aria-label="Export">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12"/>
+                  <path d="M8 11l4 4 4-4"/>
+                  <path d="M4 21h16"/>
+                </svg>
+                Export
+              </button>
+            </div>
+            <div class="muted" style="margin-top:6px">Exports a stable JSON/NDJSON snapshot of the selected layer.</div>
+          </div>
+        </div>
+
+        <div class="row" style="align-items:flex-end; margin-top:10px">
+          <div class="grow">
+            <label>Import (append-only)</label>
+            <div class="row">
+              <input id="importFile" type="file" accept=".json,.ndjson,application/json,application/x-ndjson">
+              <select id="importScope"></select>
+              <button id="importBtn" class="icon secondary" title="Import into selected scope" aria-label="Import">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 21V9"/>
+                  <path d="M8 13l4-4 4 4"/>
+                  <path d="M4 3h16"/>
+                </svg>
+                Import
+              </button>
+            </div>
+            <div class="muted" style="margin-top:6px">Imports an export file and appends chunks to a writable layer under the root.</div>
           </div>
         </div>
       </section>
@@ -138,10 +184,135 @@
               </svg>
             </button>
           </div>
-          <pre id="viewBody" class="mono" style="white-space:pre-wrap; margin:10px 0 0"></pre>
+          <div id="viewBody" class="md" style="margin:10px 0 0"></div>
+          <div id="viewActions" style="margin-top:10px; display:none">
+            <label>Target layer</label>
+            <select id="promoteTarget"></select>
+            <div class="row">
+              <button id="proposeBtn" class="icon secondary" title="Record a proposal for this chunk" aria-label="Propose">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14"/>
+                  <path d="M5 12h14"/>
+                </svg>
+                Propose
+              </button>
+              <button id="promoteBtn" class="icon" title="Promote this chunk into the selected target layer" aria-label="Promote">
+                <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 6L9 17l-5-5"/>
+                </svg>
+                Promote
+              </button>
+            </div>
+            <div id="proposePanel" style="display:none; margin-top:10px">
+              <label>Title (optional)</label>
+              <input id="proposeTitle">
+              <label>Why (optional)</label>
+              <input id="proposeWhy">
+              <label>What (optional)</label>
+              <input id="proposeWhat">
+              <label>Where (optional)</label>
+              <input id="proposeWhere">
+              <div class="row" style="margin-top:10px">
+                <button id="proposeSubmit" class="icon" title="Submit proposal" aria-label="Submit proposal">
+                  <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 6L9 17l-5-5"/>
+                  </svg>
+                  Submit
+                </button>
+                <button id="proposeCancel" class="icon secondary" title="Cancel" aria-label="Cancel propose">
+                  <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M18 6L6 18"/>
+                    <path d="M6 6l12 12"/>
+                  </svg>
+                  Cancel
+                </button>
+              </div>
+              <div class="muted" style="margin-top:6px">
+                Proposals are stored as <span class="mono">meta.proposal_event</span> records appended to <span class="mono">AGENTS.delta.db</span>.
+              </div>
+            </div>
+          </div>
         </div>
+
+        <div id="editor" style="margin-top:10px; display:none">
+          <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+          <div class="row">
+            <div id="editTitle" class="mono"></div>
+            <button id="closeEdit" class="iconOnly secondary" title="Close (Esc)" aria-label="Close editor">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6L6 18"/>
+                <path d="M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <label>Scope (writes only)</label>
+          <select id="editScope"></select>
+          <label>Kind</label>
+          <input id="editKind">
+          <label>Confidence</label>
+          <input id="editConfidence" type="number" min="0" max="1" step="0.01">
+          <label>Content</label>
+          <textarea id="editContent" rows="8" class="mono"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button id="editSubmit" class="icon" title="Append updated chunk and tombstone the old version (Ctrl/⌘ + Enter)" aria-label="Save edit">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              Save (append)
+            </button>
+            <button id="editTombstone" class="icon secondary" title="Manually tombstone without editing (use if you already saved)" aria-label="Tombstone previous">
+              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18"/>
+                <path d="M8 6V4h8v2"/>
+                <path d="M19 6l-1 14H6L5 6"/>
+                <path d="M10 11v6"/>
+                <path d="M14 11v6"/>
+              </svg>
+              Tombstone old
+            </button>
+          </div>
+          <div class="muted" style="margin-top:6px">
+            Edits are append-only: saving creates a new record with the same id. You can optionally tombstone the previous record.
+          </div>
+        </div>
+      </section>
+
+      <section id="proposalsPanel" class="card">
+        <div class="row">
+          <div>
+            <div class="mono" style="font-weight:650">Proposals</div>
+              <div class="muted" style="font-size:12px; margin-top:2px">Propose → review → promote (Local → Delta → User)</div>
+          </div>
+          <button id="refreshProposals" class="iconOnly secondary" title="Refresh proposals" aria-label="Refresh proposals" style="flex:0 0 auto">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+              <path d="M21 3v6h-6"/>
+            </svg>
+          </button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="acceptSelected" class="icon" title="Accept selected proposals (promote in target layer)" aria-label="Accept selected">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 6L9 17l-5-5"/>
+            </svg>
+            Accept
+          </button>
+          <button id="rejectSelected" class="icon secondary" title="Reject selected proposals" aria-label="Reject selected">
+            <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6L6 18"/>
+              <path d="M6 6l12 12"/>
+            </svg>
+            Reject
+          </button>
+        </div>
+        <div class="muted" id="proposalsStatus" style="margin:10px 0"></div>
+        <table id="proposalsTable">
+          <thead>
+            <tr><th></th><th>Proposal</th><th>Context</th><th>From → To</th><th>Status</th><th>Title</th><th>Actions</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </section>
     </main>
   </body>
 </html>
-

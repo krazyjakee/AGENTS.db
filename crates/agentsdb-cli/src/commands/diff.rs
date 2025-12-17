@@ -2,7 +2,13 @@ use anyhow::Context;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-pub(crate) fn cmd_diff(base: &str, delta: &str, json: bool) -> anyhow::Result<()> {
+pub(crate) fn cmd_diff(
+    base: &str,
+    delta: &str,
+    target: Option<&str>,
+    user: Option<&str>,
+    json: bool,
+) -> anyhow::Result<()> {
     let base_file =
         agentsdb_format::LayerFile::open(base).with_context(|| format!("open {base}"))?;
     let delta_file =
@@ -23,6 +29,32 @@ pub(crate) fn cmd_diff(base: &str, delta: &str, json: bool) -> anyhow::Result<()
     new_ids.sort_unstable();
     overrides.sort_unstable();
 
+    let (target_name, target_conflicts) = match target {
+        None => (None, Vec::new()),
+        Some("user") => {
+            let user =
+                user.ok_or_else(|| anyhow::anyhow!("--user is required when --target user"))?;
+            let user_path = std::path::Path::new(user);
+            if !user_path.exists() {
+                (Some("user"), Vec::new())
+            } else {
+                let user_file = agentsdb_format::LayerFile::open(user)
+                    .with_context(|| format!("open {user}"))?;
+                let user_chunks = agentsdb_format::read_all_chunks(&user_file)?;
+                let user_ids: BTreeSet<u32> = user_chunks.iter().map(|c| c.id).collect();
+                let mut conflicts: Vec<u32> = delta_chunks
+                    .iter()
+                    .map(|c| c.id)
+                    .filter(|id| user_ids.contains(id))
+                    .collect();
+                conflicts.sort_unstable();
+                conflicts.dedup();
+                (Some("user"), conflicts)
+            }
+        }
+        Some(other) => anyhow::bail!("unsupported --target {other:?}"),
+    };
+
     if json {
         #[derive(Serialize)]
         struct Out<'a> {
@@ -31,6 +63,10 @@ pub(crate) fn cmd_diff(base: &str, delta: &str, json: bool) -> anyhow::Result<()
             delta_count: usize,
             new_ids: Vec<u32>,
             overrides: Vec<u32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            target: Option<&'a str>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            target_conflicts: Vec<u32>,
         }
         println!(
             "{}",
@@ -40,6 +76,8 @@ pub(crate) fn cmd_diff(base: &str, delta: &str, json: bool) -> anyhow::Result<()
                 delta_count: delta_chunks.len(),
                 new_ids,
                 overrides,
+                target: target_name,
+                target_conflicts,
             })?
         );
         return Ok(());
@@ -53,6 +91,15 @@ pub(crate) fn cmd_diff(base: &str, delta: &str, json: bool) -> anyhow::Result<()
     println!("Overrides (id exists in base): {}", overrides.len());
     for id in &overrides {
         println!("  - {id}");
+    }
+    if let Some(target) = target_name {
+        println!(
+            "Conflicts (id exists in {target}): {}",
+            target_conflicts.len()
+        );
+        for id in &target_conflicts {
+            println!("  - {id}");
+        }
     }
     Ok(())
 }

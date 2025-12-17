@@ -2,17 +2,30 @@ use agentsdb_core::error::{Error, FormatError, SchemaError};
 use agentsdb_core::types::{
     Author, Chunk, ChunkId, LayerId, ProvenanceRef, SearchFilters, SearchResult,
 };
+use agentsdb_embeddings::config::{KIND_OPTIONS, KIND_TOMBSTONE};
 use agentsdb_format::{LayerFile, SourceRef};
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-type Visibility = (HashSet<(LayerId, ChunkId)>, HashMap<ChunkId, Vec<LayerId>>);
+mod index;
+pub use index::{build_layer_index, default_index_path_for_layer, IndexBuildOptions, IndexLookup};
 
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
     pub embedding: Vec<f32>,
     pub k: usize,
     pub filters: SearchFilters,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SearchOptions {
+    /// When enabled, search may use a sidecar index (if present and not stale) to accelerate exact search.
+    pub use_index: bool,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self { use_index: false }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +58,14 @@ pub fn search_layers(
     layers: &[(LayerId, LayerFile)],
     query: &SearchQuery,
 ) -> Result<Vec<SearchResult>, Error> {
+    search_layers_with_options(layers, query, SearchOptions::default())
+}
+
+pub fn search_layers_with_options(
+    layers: &[(LayerId, LayerFile)],
+    query: &SearchQuery,
+    options: SearchOptions,
+) -> Result<Vec<SearchResult>, Error> {
     if query.k == 0 {
         return Err(FormatError::InvalidValue {
             field: "k",
@@ -61,8 +82,9 @@ pub fn search_layers(
         return Err(SchemaError::Mismatch("query embedding dimension mismatch").into());
     }
 
-    // Precompute which chunk IDs are hidden by higher-precedence layers.
-    let (visible, hidden_by) = compute_visibility(layers)?;
+    // Precompute which chunk IDs are selected (local > user > delta > base), accounting for
+    // append-only updates within a layer and tombstone retractions.
+    let selection = compute_selection(layers)?;
 
     let kind_filter: Option<HashSet<&str>> = if query.filters.kinds.is_empty() {
         None
@@ -74,61 +96,86 @@ pub fn search_layers(
     let mut tmp = vec![0.0f32; dim];
     let mut hits: Vec<SearchResult> = Vec::new();
 
-    for (layer_id, layer) in layers {
-        for chunk_res in layer.chunks() {
-            let chunk = chunk_res?;
-            let chunk_id = ChunkId(chunk.id);
-            if !visible.contains(&(*layer_id, chunk_id)) {
+    let layers_by_id: HashMap<LayerId, &LayerFile> =
+        layers.iter().map(|(id, f)| (*id, f)).collect();
+
+    let index_lookup = if options.use_index {
+        IndexLookup::open_for_layers(layers)?
+    } else {
+        IndexLookup::empty()
+    };
+
+    for (chunk_id, selected) in selection.selected.iter() {
+        let layer = layers_by_id
+            .get(&selected.layer)
+            .ok_or(SchemaError::Mismatch(
+                "selected layer missing from layer set",
+            ))?;
+        let chunk = selected.chunk;
+
+        if let Some(kinds) = &kind_filter {
+            if !kinds.contains(chunk.kind) {
                 continue;
             }
-            if let Some(kinds) = &kind_filter {
-                if !kinds.contains(chunk.kind) {
-                    continue;
+        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS {
+            continue;
+        }
+
+        let score = if let Some(index) = index_lookup.index_for(selected.layer) {
+            let (row_norm, row_opt) = index.row_f32_and_norm(chunk.embedding_row)?;
+            match row_opt {
+                Some(row) => {
+                    cosine_similarity_row_norm(&query.embedding, query_norm, row, row_norm)
+                }
+                None => {
+                    layer.read_embedding_row_f32(chunk.embedding_row, &mut tmp)?;
+                    cosine_similarity_row_norm(&query.embedding, query_norm, &tmp, row_norm)
                 }
             }
-
+        } else {
             layer.read_embedding_row_f32(chunk.embedding_row, &mut tmp)?;
-            let score = cosine_similarity(&query.embedding, query_norm, &tmp);
+            cosine_similarity(&query.embedding, query_norm, &tmp)
+        };
 
-            let sources = layer
-                .sources_for(chunk.rel_start, chunk.rel_count)?
-                .into_iter()
-                .map(|s| match s {
-                    SourceRef::ChunkId(id) => ProvenanceRef::ChunkId(ChunkId(id)),
-                    SourceRef::String(v) => ProvenanceRef::SourceString(v.to_string()),
-                })
-                .collect();
+        let sources = layer
+            .sources_for(chunk.rel_start, chunk.rel_count)?
+            .into_iter()
+            .map(|s| match s {
+                SourceRef::ChunkId(id) => ProvenanceRef::ChunkId(ChunkId(id)),
+                SourceRef::String(v) => ProvenanceRef::SourceString(v.to_string()),
+            })
+            .collect();
 
-            let out_chunk = Chunk {
-                id: ChunkId(chunk.id),
-                kind: chunk.kind.to_string(),
-                content: chunk.content.to_string(),
-                author: match chunk.author {
-                    "human" => Author::Human,
-                    "mcp" => Author::Mcp,
-                    _other => {
-                        return Err(FormatError::InvalidValue {
-                            field: "ChunkRecord.author_str_id",
-                            reason: "must resolve to 'human' or 'mcp'",
-                        }
-                        .into());
+        let out_chunk = Chunk {
+            id: ChunkId(chunk.id),
+            kind: chunk.kind.to_string(),
+            content: chunk.content.to_string(),
+            author: match chunk.author {
+                "human" => Author::Human,
+                "mcp" => Author::Mcp,
+                _other => {
+                    return Err(FormatError::InvalidValue {
+                        field: "ChunkRecord.author_str_id",
+                        reason: "must resolve to 'human' or 'mcp'",
                     }
-                },
-                confidence: chunk.confidence,
-                created_at_unix_ms: chunk.created_at_unix_ms,
-                sources,
-            };
+                    .into());
+                }
+            },
+            confidence: chunk.confidence,
+            created_at_unix_ms: chunk.created_at_unix_ms,
+            sources,
+        };
 
-            hits.push(SearchResult {
-                layer: *layer_id,
-                score,
-                chunk: out_chunk,
-                hidden_layers: hidden_by
-                    .get(&ChunkId(chunk.id))
-                    .cloned()
-                    .unwrap_or_default(),
-            });
-        }
+        hits.push(SearchResult {
+            layer: selected.layer,
+            score,
+            chunk: out_chunk,
+            hidden_layers: selection
+                .hidden_by
+                .get(chunk_id)
+                .cloned()
+                .unwrap_or_default(),
+        });
     }
 
     hits.sort_by(|a, b| {
@@ -161,26 +208,69 @@ fn validate_schema_compatible(layers: &[(LayerId, LayerFile)]) -> Result<(), Err
     Ok(())
 }
 
-fn compute_visibility(layers: &[(LayerId, LayerFile)]) -> Result<Visibility, Error> {
-    let mut seen: HashMap<ChunkId, LayerId> = HashMap::new();
-    let mut visible: HashSet<(LayerId, ChunkId)> = HashSet::new();
+struct Selection<'a> {
+    selected: HashMap<ChunkId, SelectedChunk<'a>>,
+    hidden_by: HashMap<ChunkId, Vec<LayerId>>,
+}
+
+struct SelectedChunk<'a> {
+    layer: LayerId,
+    chunk: agentsdb_format::ChunkView<'a>,
+}
+
+fn compute_selection(layers: &[(LayerId, LayerFile)]) -> Result<Selection<'_>, Error> {
+    let mut selected: HashMap<ChunkId, SelectedChunk<'_>> = HashMap::new();
     let mut hidden_by: HashMap<ChunkId, Vec<LayerId>> = HashMap::new();
+    let mut retracted_in_higher: HashSet<ChunkId> = HashSet::new();
 
     for (layer_id, layer) in layers {
-        for chunk in layer.chunks() {
-            let chunk = chunk?;
-            let id = ChunkId(chunk.id);
-            match seen.entry(id) {
-                Entry::Vacant(v) => {
-                    v.insert(*layer_id);
-                    visible.insert((*layer_id, id));
-                }
-                Entry::Occupied(_) => hidden_by.entry(id).or_default().push(*layer_id),
+        let mut last_by_id: HashMap<ChunkId, agentsdb_format::ChunkView<'_>> = HashMap::new();
+        let mut retracted_in_layer: HashSet<ChunkId> = HashSet::new();
+
+        for chunk_res in layer.chunks() {
+            let chunk = chunk_res?;
+            last_by_id.insert(ChunkId(chunk.id), chunk);
+        }
+
+        for chunk in last_by_id.values() {
+            if chunk.kind != KIND_TOMBSTONE {
+                continue;
             }
+            let sources = layer.sources_for(chunk.rel_start, chunk.rel_count)?;
+            for s in sources {
+                if let SourceRef::ChunkId(id) = s {
+                    retracted_in_layer.insert(ChunkId(id));
+                }
+            }
+        }
+
+        for id in retracted_in_layer {
+            retracted_in_higher.insert(id);
+        }
+
+        for (id, chunk) in last_by_id {
+            if selected.contains_key(&id) {
+                hidden_by.entry(id).or_default().push(*layer_id);
+                continue;
+            }
+            if retracted_in_higher.contains(&id) && chunk.kind != KIND_TOMBSTONE {
+                hidden_by.entry(id).or_default().push(*layer_id);
+                continue;
+            }
+            selected.insert(
+                id,
+                SelectedChunk {
+                    layer: *layer_id,
+                    chunk,
+                },
+            );
         }
     }
 
-    Ok((visible, hidden_by))
+    Ok(Selection {
+        selected,
+        hidden_by,
+    })
 }
 
 fn score_for_sort(v: f32) -> f32 {
@@ -217,10 +307,22 @@ fn cosine_similarity(query: &[f32], query_norm: f32, row: &[f32]) -> f32 {
     }
 }
 
+fn cosine_similarity_row_norm(query: &[f32], query_norm: f32, row: &[f32], row_norm: f32) -> f32 {
+    if query_norm == 0.0 || row_norm == 0.0 || row.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    for (a, b) in query.iter().zip(row.iter()) {
+        dot += a * b;
+    }
+    dot / (query_norm * row_norm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use agentsdb_format::EmbeddingElementType;
+    use std::path::PathBuf;
 
     fn build_layer_two_chunks_f32(one_chunk: bool) -> Vec<u8> {
         // Strings: human, mcp, kind_a, kind_b, content_a, content_b
@@ -470,5 +572,49 @@ mod tests {
         let local_1 = res.iter().find(|r| r.chunk.id.get() == 1).unwrap();
         assert_eq!(local_1.layer, LayerId::Local);
         assert_eq!(local_1.hidden_layers, vec![LayerId::Base]);
+    }
+
+    #[test]
+    fn search_with_index_matches_bruteforce() {
+        let data = build_layer_two_chunks_f32(false);
+        let dir = tempfile::tempdir().unwrap();
+        let layer_path = dir.path().join("AGENTS.db");
+        std::fs::write(&layer_path, &data).unwrap();
+
+        let layer = LayerFile::open(&layer_path).unwrap();
+        assert_eq!(
+            layer.embedding_matrix.element_type,
+            EmbeddingElementType::F32
+        );
+
+        let index_path = PathBuf::from(format!("{}.agix", layer_path.display()));
+        build_layer_index(
+            &layer,
+            &index_path,
+            IndexBuildOptions {
+                store_embeddings_even_if_f32: false,
+            },
+        )
+        .unwrap();
+
+        let layers = vec![(LayerId::Base, layer)];
+        let q = SearchQuery {
+            embedding: vec![1.0, 0.0],
+            k: 10,
+            filters: SearchFilters::default(),
+        };
+
+        let brute =
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: false }).unwrap();
+        let indexed =
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: true }).unwrap();
+
+        assert_eq!(brute.len(), indexed.len());
+        for (a, b) in brute.iter().zip(indexed.iter()) {
+            assert_eq!(a.layer, b.layer);
+            assert_eq!(a.chunk.id, b.chunk.id);
+            assert_eq!(a.chunk.kind, b.chunk.kind);
+            assert_eq!(a.chunk.content, b.chunk.content);
+        }
     }
 }

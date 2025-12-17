@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-base-100 text-base-content;
+  }
+}
+
+@layer components {
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Menlo, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  }
+
+  /* Prose styles for dark mode */
+  .prose {
+    @apply text-base-content;
+  }
+
+  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    @apply text-base-content;
+  }
+
+  .prose strong {
+    @apply text-base-content font-bold;
+  }
+
+  .prose code {
+    @apply bg-base-300 text-base-content px-1 py-0.5 rounded;
+  }
+
+  .prose pre {
+    @apply bg-base-300 text-base-content;
+  }
+
+  .prose a {
+    @apply text-primary hover:underline;
+  }
+
+  .prose blockquote {
+    @apply border-l-primary text-base-content/80;
+  }
+
+  .prose hr {
+    @apply border-base-content/20;
+  }
+
+  .prose ul, .prose ol {
+    @apply text-base-content;
+  }
+
+  .prose table {
+    @apply text-base-content;
+  }
+
+  .prose thead {
+    @apply border-base-content/20;
+  }
+
+  .prose tbody tr {
+    @apply border-base-content/10;
+  }
+}

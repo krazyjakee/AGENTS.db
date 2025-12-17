@@ -5,6 +5,7 @@ use crate::types::ListEntryJson;
 use crate::util::{fmt_bytes_human, fmt_u64_commas};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents a single AGENTS.db layer file found during listing.
 struct ListedLayer {
     file_name: String,
     chunk_count: u64,
@@ -114,7 +115,6 @@ fn print_table(layers: &[ListedLayer]) {
 mod tests {
     use super::*;
     use agentsdb_format::{ChunkInput, EmbeddingElementType};
-    use std::path::PathBuf;
 
     fn write_layer(path: &Path, chunk_count: u32) {
         let schema = agentsdb_format::LayerSchema {
@@ -134,7 +134,7 @@ mod tests {
                 sources: Vec::new(),
             })
             .collect();
-        agentsdb_format::write_layer_atomic(path, &schema, &chunks).expect("write layer");
+        agentsdb_format::write_layer_atomic(path, &schema, &chunks, None).expect("write layer");
     }
 
     #[test]

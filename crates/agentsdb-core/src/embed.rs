@@ -1,3 +1,8 @@
+/// Generates a deterministic, hash-based embedding for a given text.
+///
+/// This function splits the text into whitespace-separated tokens, hashes each token,
+/// and accumulates the hash into a vector of the specified dimension. The resulting
+/// vector is then L2-normalized.
 pub fn hash_embed(text: &str, dim: usize) -> Vec<f32> {
     if dim == 0 {
         return Vec::new();

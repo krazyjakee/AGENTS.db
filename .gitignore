@@ -26,3 +26,4 @@
 !.env.example
 *.log
 AGENTS.local.db
+.mcp.json

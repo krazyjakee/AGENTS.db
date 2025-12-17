@@ -1,5 +1,9 @@
-use agentsdb_core::embed::hash_embed;
-use agentsdb_core::types::SearchFilters;
+use agentsdb_core::types::{LayerId, SearchFilters};
+use agentsdb_embeddings::config::{
+    roll_up_embedding_options, roll_up_embedding_options_from_paths,
+};
+use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
+use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
 use agentsdb_query::{LayerSet, SearchQuery};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -233,6 +237,14 @@ enum WriteSource {
 struct ProposeParams {
     context_id: u32,
     target: String, // user
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+    #[serde(default)]
+    what: Option<String>,
+    #[serde(default, rename = "where")]
+    where_: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,17 +339,17 @@ fn handle_request(config: &ServerConfig, req: &Request) -> Result<Value, RpcErro
         TOOL_AGENTS_SEARCH | TOOL_AGENTS_SEARCH_LEGACY => {
             let params: SearchParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_search(config, params).map_err(|e| RpcError::internal_error(e.to_string()))
+            handle_search(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         TOOL_AGENTS_CONTEXT_WRITE | TOOL_AGENTS_CONTEXT_WRITE_LEGACY => {
             let params: WriteParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_write(config, params).map_err(|e| RpcError::internal_error(e.to_string()))
+            handle_write(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         TOOL_AGENTS_CONTEXT_PROPOSE | TOOL_AGENTS_CONTEXT_PROPOSE_LEGACY => {
             let params: ProposeParams = serde_json::from_value(req.params.clone())
                 .map_err(|e| RpcError::invalid_params(format!("parse params: {e}")))?;
-            handle_propose(config, params).map_err(|e| RpcError::internal_error(e.to_string()))
+            handle_propose(config, params).map_err(|e| RpcError::internal_error(format!("{e:#}")))
         }
         other => Err(RpcError::method_not_found(format!(
             "unknown method: {other}"
@@ -408,12 +420,16 @@ fn handle_tools_list() -> Value {
             },
             {
                 "name": TOOL_AGENTS_CONTEXT_PROPOSE,
-                "description": "Propose promotion of a delta chunk of to user.",
+                "description": "Propose promotion of a delta chunk to the user layer.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "context_id": { "type": "integer" },
-                        "target": { "type": "string", "enum": ["user"] }
+                        "target": { "type": "string", "enum": ["user"] },
+                        "title": { "type": "string" },
+                        "why": { "type": "string" },
+                        "what": { "type": "string" },
+                        "where": { "type": "string" }
                     },
                     "required": ["context_id", "target"]
                 }
@@ -427,17 +443,17 @@ fn handle_tools_call(config: &ServerConfig, params: ToolCallParams) -> Result<Va
         TOOL_AGENTS_SEARCH | TOOL_AGENTS_SEARCH_LEGACY => {
             let args: SearchParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_search(config, args).map_err(|e| RpcError::internal_error(e.to_string()))?
+            handle_search(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         TOOL_AGENTS_CONTEXT_WRITE | TOOL_AGENTS_CONTEXT_WRITE_LEGACY => {
             let args: WriteParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_write(config, args).map_err(|e| RpcError::internal_error(e.to_string()))?
+            handle_write(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         TOOL_AGENTS_CONTEXT_PROPOSE | TOOL_AGENTS_CONTEXT_PROPOSE_LEGACY => {
             let args: ProposeParams = serde_json::from_value(params.arguments)
                 .map_err(|e| RpcError::invalid_params(format!("parse arguments: {e}")))?;
-            handle_propose(config, args).map_err(|e| RpcError::internal_error(e.to_string()))?
+            handle_propose(config, args).map_err(|e| RpcError::internal_error(format!("{e:#}")))?
         }
         other => return Err(RpcError::method_not_found(format!("unknown tool: {other}"))),
     };
@@ -450,6 +466,371 @@ fn handle_tools_call(config: &ServerConfig, params: ToolCallParams) -> Result<Va
             }
         ]
     }))
+}
+
+fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<Value> {
+    if params.query.trim().is_empty() {
+        anyhow::bail!("query must be non-empty");
+    }
+
+    let filters = SearchFilters {
+        kinds: params.filters.map(|f| f.kind).unwrap_or_default(),
+    };
+    let k = params.k.unwrap_or(10);
+
+    // Select configured layer paths; `params.layers` filters by layer id.
+    let mut layers = LayerSet {
+        base: config.base.clone(),
+        user: config.user.clone(),
+        delta: config.delta.clone(),
+        local: config.local.clone(),
+    };
+    if let Some(selected) = params.layers {
+        let keep = |name: &str| selected.iter().any(|v| v == name);
+        if !keep("base") {
+            layers.base = None;
+        }
+        if !keep("user") {
+            layers.user = None;
+        }
+        if !keep("delta") {
+            layers.delta = None;
+        }
+        if !keep("local") {
+            layers.local = None;
+        }
+    }
+
+    // Treat missing optional layers as absent. Base is expected to exist if configured.
+    if let Some(base) = layers.base.as_deref() {
+        if !Path::new(base).exists() {
+            anyhow::bail!(
+                "base layer not found at {base:?} (configure an absolute path, or run the server with CWD set to your project root)"
+            );
+        }
+    }
+    if let Some(user) = layers.user.as_deref() {
+        if !Path::new(user).exists() {
+            layers.user = None;
+        }
+    }
+    if let Some(delta) = layers.delta.as_deref() {
+        if !Path::new(delta).exists() {
+            layers.delta = None;
+        }
+    }
+    if let Some(local) = layers.local.as_deref() {
+        if !Path::new(local).exists() {
+            layers.local = None;
+        }
+    }
+
+    let opened = layers.open().context("open layers")?;
+    if opened.is_empty() {
+        anyhow::bail!("no layers configured");
+    }
+    let dim = opened[0].1.embedding_dim();
+    let mut local = None;
+    let mut user = None;
+    let mut delta = None;
+    let mut base = None;
+    for (layer_id, file) in &opened {
+        match layer_id {
+            LayerId::Local => local = Some(file),
+            LayerId::User => user = Some(file),
+            LayerId::Delta => delta = Some(file),
+            LayerId::Base => base = Some(file),
+        }
+    }
+    let options =
+        roll_up_embedding_options(&[local, user, delta, base]).context("roll up options")?;
+    if let Some(cfg_dim) = options.dim {
+        if cfg_dim != dim {
+            anyhow::bail!(
+                "embedding dim mismatch (layers are dim={dim}, options specify dim={cfg_dim})"
+            );
+        }
+    }
+    let embedder = options
+        .into_embedder(dim)
+        .context("resolve embedder from options")?;
+    let embedding = match params.query_vec {
+        Some(v) => {
+            if v.len() != dim {
+                anyhow::bail!(
+                    "query_vec dimension mismatch (expected {dim}, got {})",
+                    v.len()
+                );
+            }
+            v
+        }
+        None => embedder
+            .embed({
+                for (_, file) in &opened {
+                    ensure_layer_metadata_compatible_with_embedder(file, embedder.as_ref())
+                        .context("validate layer metadata vs embedder")?;
+                }
+                std::slice::from_ref(&params.query)
+            })?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| vec![0.0; dim]),
+    };
+    let query = SearchQuery {
+        embedding: embedding.clone(),
+        k,
+        filters,
+    };
+    let results = agentsdb_query::search_layers_with_options(
+        &opened,
+        &query,
+        agentsdb_query::SearchOptions { use_index: true },
+    )
+    .context("search")?;
+    Ok(serde_json::to_value(results)?)
+}
+
+fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Value> {
+    if params.scope != "local" && params.scope != "delta" {
+        anyhow::bail!("scope must be 'local' or 'delta'");
+    }
+    let path = match params.scope.as_str() {
+        "local" => config
+            .local
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("local layer path not configured"))?,
+        "delta" => config
+            .delta
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("delta layer path not configured"))?,
+        _ => unreachable!(),
+    };
+
+    agentsdb_format::ensure_writable_layer_path(path)?;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let sources = params
+        .sources
+        .into_iter()
+        .map(|s| match s {
+            WriteSource::String(v) => Ok(agentsdb_format::ChunkSource::SourceString(v)),
+            WriteSource::ChunkId { chunk_id } => {
+                if chunk_id == 0 {
+                    anyhow::bail!("source chunk_id must be non-zero");
+                }
+                Ok(agentsdb_format::ChunkSource::ChunkId(chunk_id))
+            }
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let mut chunk = agentsdb_format::ChunkInput {
+        id: 0,
+        kind: params.kind,
+        content: params.content,
+        author: "mcp".to_string(),
+        confidence: params.confidence,
+        created_at_unix_ms: now_ms,
+        embedding: Vec::new(),
+        sources,
+    };
+
+    if !(0.0..=1.0).contains(&chunk.confidence) || !chunk.confidence.is_finite() {
+        anyhow::bail!("confidence must be finite and in range 0.0..=1.0");
+    }
+
+    let assigned = if std::path::Path::new(path).exists() {
+        let file = agentsdb_format::LayerFile::open(path).context("open layer")?;
+        let dim = file.embedding_dim();
+        let options = roll_up_embedding_options_from_paths(
+            config.local.as_deref().map(std::path::Path::new),
+            config.user.as_deref().map(std::path::Path::new),
+            config.delta.as_deref().map(std::path::Path::new),
+            config.base.as_deref().map(std::path::Path::new),
+        )
+        .context("roll up options")?;
+        if let Some(cfg_dim) = options.dim {
+            if cfg_dim != dim {
+                anyhow::bail!(
+                    "embedding dim mismatch (layer is dim={dim}, options specify dim={cfg_dim})"
+                );
+            }
+        }
+        let embedder = options
+            .into_embedder(dim)
+            .context("resolve embedder from options")?;
+        chunk.embedding = embedder
+            .embed(&[chunk.content.clone()])?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| vec![0.0; dim]);
+        let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
+            .with_embedder_metadata(embedder.metadata())
+            .with_tool("agentsdb-mcp", env!("CARGO_PKG_VERSION"));
+        let layer_metadata_json = layer_metadata
+            .to_json_bytes()
+            .context("serialize layer metadata")?;
+        let mut chunks = vec![chunk];
+        if let Some(existing) = file.layer_metadata_bytes() {
+            let existing = LayerMetadataV1::from_json_bytes(existing)
+                .context("parse existing layer metadata")?;
+            if existing.embedding_profile != *embedder.profile() {
+                anyhow::bail!(
+                    "embedder profile mismatch vs existing layer metadata (existing={:?}, current={:?})",
+                    existing.embedding_profile,
+                    embedder.profile()
+                );
+            }
+            let ids =
+                agentsdb_format::append_layer_atomic(path, &mut chunks, None).context("append")?;
+            ids[0]
+        } else {
+            let ids =
+                agentsdb_format::append_layer_atomic(path, &mut chunks, Some(&layer_metadata_json))
+                    .context("append")?;
+            ids[0]
+        }
+    } else {
+        chunk.id = 1;
+        let schema = infer_schema_from_config(config).context("infer schema")?;
+        let dim = schema.dim as usize;
+        let options = roll_up_embedding_options_from_paths(
+            config.local.as_deref().map(std::path::Path::new),
+            config.user.as_deref().map(std::path::Path::new),
+            config.delta.as_deref().map(std::path::Path::new),
+            config.base.as_deref().map(std::path::Path::new),
+        )
+        .context("roll up options")?;
+        if let Some(cfg_dim) = options.dim {
+            if cfg_dim != dim {
+                anyhow::bail!(
+                    "embedding dim mismatch (schema is dim={dim}, options specify dim={cfg_dim})"
+                );
+            }
+        }
+        let embedder = options
+            .into_embedder(dim)
+            .context("resolve embedder from options")?;
+        chunk.embedding = embedder
+            .embed(&[chunk.content.clone()])?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| vec![0.0; dim]);
+        let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
+            .with_embedder_metadata(embedder.metadata())
+            .with_tool("agentsdb-mcp", env!("CARGO_PKG_VERSION"));
+        let layer_metadata_json = layer_metadata
+            .to_json_bytes()
+            .context("serialize layer metadata")?;
+        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&layer_metadata_json))
+            .context("create layer")?;
+        1
+    };
+
+    Ok(serde_json::json!({ "context_id": assigned }))
+}
+
+fn infer_schema_from_config(config: &ServerConfig) -> anyhow::Result<agentsdb_format::LayerSchema> {
+    let candidates = [
+        config.local.as_deref(),
+        config.delta.as_deref(),
+        config.user.as_deref(),
+        config.base.as_deref(),
+    ];
+    for p in candidates.into_iter().flatten() {
+        let path = std::path::Path::new(p);
+        if path.exists() {
+            let file =
+                agentsdb_format::LayerFile::open(path).with_context(|| format!("open {p}"))?;
+            let s = agentsdb_format::schema_of(&file);
+            return Ok(agentsdb_format::LayerSchema {
+                dim: s.dim,
+                element_type: s.element_type,
+                quant_scale: s.quant_scale,
+            });
+        }
+    }
+    Ok(agentsdb_format::LayerSchema {
+        dim: 128,
+        element_type: agentsdb_format::EmbeddingElementType::F32,
+        quant_scale: 1.0,
+    })
+}
+
+fn handle_propose(config: &ServerConfig, params: ProposeParams) -> anyhow::Result<Value> {
+    if params.target != "user" {
+        anyhow::bail!("target must be 'user'");
+    }
+    const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
+
+    let Some(delta_path) = &config.delta else {
+        anyhow::bail!("delta layer path not configured");
+    };
+
+    let delta_p = std::path::Path::new(delta_path);
+    if !delta_p.exists() {
+        anyhow::bail!("delta layer file not found at {delta_path}");
+    }
+    agentsdb_format::ensure_writable_layer_path(delta_p).context("permission check")?;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let delta_file = agentsdb_format::LayerFile::open(delta_p).context("open delta layer")?;
+    let delta_chunks =
+        agentsdb_format::read_all_chunks(&delta_file).context("read delta chunks")?;
+    let Some(src) = delta_chunks.into_iter().find(|c| c.id == params.context_id) else {
+        anyhow::bail!(
+            "context_id {} not found in delta layer {}",
+            params.context_id,
+            delta_path
+        );
+    };
+
+    let from_label = delta_p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(delta_path)
+        .to_string();
+    let to_label = config
+        .user
+        .as_deref()
+        .and_then(|p| std::path::Path::new(p).file_name().and_then(|s| s.to_str()))
+        .unwrap_or("AGENTS.user.db")
+        .to_string();
+
+    let record = serde_json::json!({
+        "action": "propose",
+        "context_id": params.context_id,
+        "from_path": from_label,
+        "to_path": to_label,
+        "created_at_unix_ms": now_ms,
+        "actor": "mcp",
+        "title": params.title,
+        "why": params.why,
+        "what": params.what,
+        "where": params.where_
+    });
+
+    let mut event_chunk = agentsdb_format::ChunkInput {
+        id: 0,
+        kind: PROPOSAL_EVENT_KIND.to_string(),
+        content: serde_json::to_string(&record).context("serialize proposal record")?,
+        author: "mcp".to_string(),
+        confidence: 1.0,
+        created_at_unix_ms: now_ms,
+        embedding: src.embedding.clone(),
+        sources: vec![agentsdb_format::ChunkSource::ChunkId(params.context_id)],
+    };
+    agentsdb_format::append_layer_atomic(delta_p, std::slice::from_mut(&mut event_chunk), None)
+        .context("append proposal event")?;
+
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 #[cfg(test)]
@@ -549,207 +930,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-}
-
-fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<Value> {
-    if params.query.trim().is_empty() {
-        anyhow::bail!("query must be non-empty");
-    }
-
-    let filters = SearchFilters {
-        kinds: params.filters.map(|f| f.kind).unwrap_or_default(),
-    };
-    let k = params.k.unwrap_or(10);
-
-    // Select configured layer paths; `params.layers` filters by layer id.
-    let mut layers = LayerSet {
-        base: config.base.clone(),
-        user: config.user.clone(),
-        delta: config.delta.clone(),
-        local: config.local.clone(),
-    };
-    if let Some(selected) = params.layers {
-        let keep = |name: &str| selected.iter().any(|v| v == name);
-        if !keep("base") {
-            layers.base = None;
-        }
-        if !keep("user") {
-            layers.user = None;
-        }
-        if !keep("delta") {
-            layers.delta = None;
-        }
-        if !keep("local") {
-            layers.local = None;
-        }
-    }
-
-    // Treat missing optional layers as absent. Base is expected to exist if configured.
-    if let Some(base) = layers.base.as_deref() {
-        if !Path::new(base).exists() {
-            anyhow::bail!(
-                "base layer not found at {base:?} (configure an absolute path, or run the server with CWD set to your project root)"
-            );
-        }
-    }
-    if let Some(user) = layers.user.as_deref() {
-        if !Path::new(user).exists() {
-            layers.user = None;
-        }
-    }
-    if let Some(delta) = layers.delta.as_deref() {
-        if !Path::new(delta).exists() {
-            layers.delta = None;
-        }
-    }
-    if let Some(local) = layers.local.as_deref() {
-        if !Path::new(local).exists() {
-            layers.local = None;
-        }
-    }
-
-    let opened = layers.open().context("open layers")?;
-    if opened.is_empty() {
-        anyhow::bail!("no layers configured");
-    }
-    let dim = opened[0].1.embedding_dim();
-    let embedding = match params.query_vec {
-        Some(v) => {
-            if v.len() != dim {
-                anyhow::bail!(
-                    "query_vec dimension mismatch (expected {dim}, got {})",
-                    v.len()
-                );
-            }
-            v
-        }
-        None => hash_embed(&params.query, dim),
-    };
-    let query = SearchQuery {
-        embedding: embedding.clone(),
-        k,
-        filters,
-    };
-    let results = agentsdb_query::search_layers(&opened, &query).context("search")?;
-    Ok(serde_json::to_value(results)?)
-}
-
-fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Value> {
-    if params.scope != "local" && params.scope != "delta" {
-        anyhow::bail!("scope must be 'local' or 'delta'");
-    }
-    let path = match params.scope.as_str() {
-        "local" => config
-            .local
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("local layer path not configured"))?,
-        "delta" => config
-            .delta
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("delta layer path not configured"))?,
-        _ => unreachable!(),
-    };
-
-    agentsdb_format::ensure_writable_layer_path(path)?;
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    let sources = params
-        .sources
-        .into_iter()
-        .map(|s| match s {
-            WriteSource::String(v) => agentsdb_format::ChunkSource::SourceString(v),
-            WriteSource::ChunkId { chunk_id } => agentsdb_format::ChunkSource::ChunkId(chunk_id),
-        })
-        .collect();
-
-    let mut chunk = agentsdb_format::ChunkInput {
-        id: 0,
-        kind: params.kind,
-        content: params.content,
-        author: "mcp".to_string(),
-        confidence: params.confidence,
-        created_at_unix_ms: now_ms,
-        embedding: Vec::new(),
-        sources,
-    };
-
-    if !(0.0..=1.0).contains(&chunk.confidence) || !chunk.confidence.is_finite() {
-        anyhow::bail!("confidence must be finite and in range 0.0..=1.0");
-    }
-
-    let assigned = if std::path::Path::new(path).exists() {
-        let file = agentsdb_format::LayerFile::open(path).context("open layer")?;
-        chunk.embedding = hash_embed(&chunk.content, file.embedding_dim());
-        let mut chunks = vec![chunk];
-        let ids = agentsdb_format::append_layer_atomic(path, &mut chunks).context("append")?;
-        ids[0]
-    } else {
-        chunk.id = 1;
-        let schema = infer_schema_from_config(config).context("infer schema")?;
-        chunk.embedding = hash_embed(&chunk.content, schema.dim as usize);
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk]).context("create layer")?;
-        1
-    };
-
-    Ok(serde_json::json!({ "context_id": assigned }))
-}
-
-fn infer_schema_from_config(config: &ServerConfig) -> anyhow::Result<agentsdb_format::LayerSchema> {
-    let candidates = [
-        config.local.as_deref(),
-        config.delta.as_deref(),
-        config.user.as_deref(),
-        config.base.as_deref(),
-    ];
-    for p in candidates.into_iter().flatten() {
-        let path = std::path::Path::new(p);
-        if path.exists() {
-            let file =
-                agentsdb_format::LayerFile::open(path).with_context(|| format!("open {p}"))?;
-            let s = agentsdb_format::schema_of(&file);
-            return Ok(agentsdb_format::LayerSchema {
-                dim: s.dim,
-                element_type: s.element_type,
-                quant_scale: s.quant_scale,
-            });
-        }
-    }
-    Ok(agentsdb_format::LayerSchema {
-        dim: 128,
-        element_type: agentsdb_format::EmbeddingElementType::F32,
-        quant_scale: 1.0,
-    })
-}
-
-fn handle_propose(config: &ServerConfig, params: ProposeParams) -> anyhow::Result<Value> {
-    if params.target != "user" {
-        anyhow::bail!("target must be 'user'");
-    }
-    let Some(delta_path) = &config.delta else {
-        anyhow::bail!("delta layer path not configured");
-    };
-    let dir = std::path::Path::new(delta_path)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let proposals = dir.join("AGENTS.proposals.jsonl");
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&proposals)?;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let record = serde_json::json!({
-        "context_id": params.context_id,
-        "target": "user",
-        "created_at_unix_ms": now_ms
-    });
-    writeln!(f, "{}", serde_json::to_string(&record)?)?;
-    f.sync_all()?;
-    Ok(serde_json::json!({ "ok": true }))
 }

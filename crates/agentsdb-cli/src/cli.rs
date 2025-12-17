@@ -1,11 +1,27 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+#[derive(Args, Clone, Debug, Default)]
+/// Arguments for specifying various AGENTS.db layers.
+pub(crate) struct LayerArgs {
+    #[arg(long)]
+    pub(crate) base: Option<String>,
+    #[arg(long)]
+    pub(crate) user: Option<String>,
+    #[arg(long)]
+    pub(crate) delta: Option<String>,
+    #[arg(long)]
+    pub(crate) local: Option<String>,
+}
 
 #[derive(Parser)]
 #[command(
     name = "agentsdb",
     version,
-    long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - `search --query` uses a deterministic hash embedding (not a semantic model)."
+    long_about = "Tools for creating, inspecting, and querying AGENTS.db layers.\n\nNotes:\n  - Layers are treated as append-only. Writes append new chunks.\n  - Embedding backends are configured via rolled-up options (default: deterministic hash)."
 )]
+/// Main command-line interface structure for the agentsdb tool.
+///
+/// This struct uses `clap` to parse command-line arguments and subcommands.
 pub(crate) struct Cli {
     /// Emit machine-readable JSON instead of human output.
     #[arg(long)]
@@ -34,9 +50,9 @@ pub(crate) enum Command {
         /// Chunk kind to assign to collected files.
         #[arg(long, default_value = "canonical")]
         kind: String,
-        /// Embedding dimension for the emitted schema.
-        #[arg(long, default_value_t = 128)]
-        dim: u32,
+        /// Embedding dimension for the emitted schema (defaults to configured options if present, else 128).
+        #[arg(long)]
+        dim: Option<u32>,
         /// Embedding element type: `f32` or `i8`.
         #[arg(long, default_value = "f32")]
         element_type: String,
@@ -63,18 +79,8 @@ pub(crate) enum Command {
     },
     /// Run the MCP server over stdio.
     Serve {
-        /// Path to a base layer (usually `AGENTS.base.db`).
-        #[arg(long)]
-        base: Option<String>,
-        /// Path to a user layer (usually `AGENTS.user.db`).
-        #[arg(long)]
-        user: Option<String>,
-        /// Path to a delta layer (usually `AGENTS.delta.db`).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Path to a local layer (usually `AGENTS.local.db`).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
     },
     /// Compile text and/or files into an on-disk layer file.
     Compile {
@@ -102,9 +108,9 @@ pub(crate) enum Command {
         /// Chunk kind to assign to generated chunks.
         #[arg(long, default_value = "canonical")]
         kind: String,
-        /// Embedding dimension for the emitted schema.
-        #[arg(long, default_value_t = 128)]
-        dim: u32,
+        /// Embedding dimension for the emitted schema (defaults to configured options if present, else 128).
+        #[arg(long)]
+        dim: Option<u32>,
         /// Embedding element type: `f32` or `i8`.
         #[arg(long, default_value = "f32")]
         element_type: String,
@@ -146,21 +152,11 @@ pub(crate) enum Command {
     },
     /// Search one or more layers using vector similarity.
     #[command(
-        after_help = "Examples:\n  agentsdb search --base AGENTS.base.db --query \"how do I run tests?\"\n  agentsdb search --user AGENTS.user.db --query-vec-file query.json -k 5\n  agentsdb search --base AGENTS.base.db --delta AGENTS.delta.db --query \"rustfmt\" --kind canonical --kind note\n\nQuery modes:\n  - --query: text hashed into a deterministic embedding (fast, but not semantic).\n  - --query-vec/--query-vec-file: provide an explicit embedding as a JSON array of numbers."
+        after_help = "Examples:\n  agentsdb search --base AGENTS.base.db --query \"how do I run tests?\"\n  agentsdb search --user AGENTS.user.db --query-vec '[0.1, 0.2, 0.3]' -k 5\n  agentsdb search --base AGENTS.base.db --delta AGENTS.delta.db --query \"rustfmt\" --kind canonical --kind note\n\nQuery modes:\n  - --query: text hashed into a deterministic embedding (fast, but not semantic).\n  - --query-vec/--query-vec-file: provide an explicit embedding as a JSON array of numbers."
     )]
     Search {
-        /// Path to a base layer (usually `AGENTS.base.db`).
-        #[arg(long)]
-        base: Option<String>,
-        /// Path to a user layer (usually `AGENTS.user.db`).
-        #[arg(long)]
-        user: Option<String>,
-        /// Path to a delta layer (usually `AGENTS.delta.db`).
-        #[arg(long)]
-        delta: Option<String>,
-        /// Path to a local layer (usually `AGENTS.local.db`).
-        #[arg(long)]
-        local: Option<String>,
+        #[command(flatten)]
+        layers: LayerArgs,
 
         /// Text query (hashed into an embedding).
         #[arg(long)]
@@ -173,12 +169,77 @@ pub(crate) enum Command {
         query_vec_file: Option<String>,
 
         /// Number of nearest neighbors to return.
-        #[arg(short, long, default_value_t = 10)]
+        #[arg(short, long, default_value_t = 5)]
         k: usize,
 
         /// Filter results by chunk kind (repeatable).
         #[arg(long = "kind")]
         kinds: Vec<String>,
+
+        /// Use a rebuildable sidecar index (if present) to accelerate exact search.
+        #[arg(long)]
+        use_index: bool,
+    },
+    /// Build a rebuildable sidecar index for one or more layers.
+    Index {
+        #[command(flatten)]
+        layers: LayerArgs,
+
+        /// Optional directory to write index artifacts into (defaults to next to each layer).
+        #[arg(long)]
+        out_dir: Option<String>,
+
+        /// Store decoded f32 embeddings even when the layer already stores f32 embeddings.
+        #[arg(long)]
+        store_embeddings_f32: bool,
+    },
+    /// Export one or more layers to a stable JSON/NDJSON format.
+    Export {
+        /// Directory to resolve standard layer paths from.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Output format: `json` or `ndjson`.
+        #[arg(long, default_value = "json", value_parser = ["json", "ndjson"])]
+        format: String,
+        /// Comma-separated logical layers: `base,user,delta,local`.
+        #[arg(long, default_value = "base,user,delta,local")]
+        layers: String,
+        /// Optional output file path (defaults to stdout).
+        #[arg(long)]
+        out: Option<String>,
+        /// Redaction mode: `none`, `content`, `embeddings`, or `all`.
+        #[arg(long, default_value = "none", value_parser = ["none", "content", "embeddings", "all"])]
+        redact: String,
+    },
+    /// Import a JSON/NDJSON export and append it to a writable layer.
+    Import {
+        /// Directory to resolve the target layer path from.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Input file path (JSON or NDJSON).
+        #[arg(long = "in")]
+        input: String,
+        /// Target logical layer: `local`, `delta`, `user`, or `base`.
+        #[arg(long, value_parser = ["local", "delta", "user", "base"])]
+        target: String,
+        /// Optional explicit target path (defaults to standard layer file under `--dir`).
+        #[arg(long)]
+        out: Option<String>,
+        /// Dry-run (parse/validate only; no writes).
+        #[arg(long)]
+        dry_run: bool,
+        /// Dedupe by content hash (skips chunks whose `sha256(content)` already exists in target).
+        #[arg(long)]
+        dedupe: bool,
+        /// Preserve input chunk ids when creating a new layer (errors on conflicts when appending).
+        #[arg(long)]
+        preserve_ids: bool,
+        /// Allow writing to `AGENTS.db` (dangerous; bypasses immutability).
+        #[arg(long)]
+        allow_base: bool,
+        /// Embedding dimension when creating a new layer and embeddings are missing.
+        #[arg(long)]
+        dim: Option<u32>,
     },
     /// Compare a base layer to a delta layer by id.
     Diff {
@@ -188,6 +249,12 @@ pub(crate) enum Command {
         /// Path to the delta layer.
         #[arg(long)]
         delta: String,
+        /// Optional target layer to compare against (e.g. to preview promotion conflicts).
+        #[arg(long, value_parser = ["user"])]
+        target: Option<String>,
+        /// Path to the user layer (required when `--target user`).
+        #[arg(long)]
+        user: Option<String>,
     },
     /// Copy selected chunks from one layer into another.
     Promote {
@@ -200,6 +267,15 @@ pub(crate) enum Command {
         /// Comma-separated chunk ids to promote (e.g. `1,2,3`).
         #[arg(long)]
         ids: String, // comma-separated
+        /// Skip ids already present in the destination layer instead of erroring.
+        #[arg(long)]
+        skip_existing: bool,
+        /// Tombstone promoted chunks in the source layer after promotion (default: true).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        tombstone_source: bool,
+        /// Assume \"yes\" for interactive confirmation prompts.
+        #[arg(long)]
+        yes: bool,
     },
     /// Rewrite and deduplicate layer files.
     Compact {
@@ -231,6 +307,176 @@ pub(crate) enum Command {
         #[arg(long, default_value = "127.0.0.1:3030")]
         bind: String,
     },
+    /// Show or update embedding-related options stored in standard layer files.
+    Options {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        #[command(subcommand)]
+        cmd: OptionsCommand,
+    },
+    /// Review and manage MCP promotion proposals.
+    Proposals {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Override the delta layer path (default: DIR/AGENTS.delta.db).
+        #[arg(long)]
+        delta: Option<String>,
+        /// Override the user layer path (default: DIR/AGENTS.user.db).
+        #[arg(long)]
+        user: Option<String>,
+        /// Override the proposal-events layer path (default: the delta layer path).
+        #[arg(long)]
+        proposals: Option<String>,
+        #[command(subcommand)]
+        cmd: ProposalsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+/// Subcommands for managing embedding-related options.
+pub(crate) enum OptionsCommand {
+    /// Print the rolled-up embedding options and where they came from.
+    Show {
+        #[command(flatten)]
+        layers: LayerArgs,
+    },
+    /// Append a new options record to a writable standard layer file.
+    Set {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Embedder backend (e.g. `hash`, `candle`, `ort`, `openai`, `voyage`, `cohere`).
+        #[arg(long)]
+        backend: Option<String>,
+        /// Embedding model identifier (provider-specific; currently unused for `hash`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Embedding model revision/version (provider-specific).
+        #[arg(long)]
+        revision: Option<String>,
+        /// Local model path (dir or file) for offline/local backends (e.g. `ort`).
+        #[arg(long)]
+        model_path: Option<String>,
+        /// Optional expected SHA-256 (lowercase hex) for local downloaded model bytes (e.g. ONNX).
+        #[arg(long)]
+        model_sha256: Option<String>,
+        /// Embedding dimension (>0; must match existing layer schemas).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        dim: Option<u32>,
+        /// API base URL for remote providers (e.g. OpenAI-compatible servers).
+        #[arg(long)]
+        api_base: Option<String>,
+        /// Environment variable name holding the provider API key.
+        #[arg(long)]
+        api_key_env: Option<String>,
+        /// Enable or disable the embedding cache.
+        #[arg(long, value_enum)]
+        cache: Option<Toggle>,
+        /// Override the embedding cache directory.
+        #[arg(long)]
+        cache_dir: Option<String>,
+    },
+    /// Interactive prompt for configuring embedding options.
+    Wizard {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+    },
+    /// Manage a known-good SHA-256 allowlist for local models (per model+revision).
+    Allowlist {
+        #[command(subcommand)]
+        cmd: AllowlistCommand,
+    },
+}
+
+#[derive(Subcommand)]
+/// Subcommands for managing the SHA-256 allowlist for local models.
+pub(crate) enum AllowlistCommand {
+    /// Print the rolled-up allowlist.
+    List {
+        #[command(flatten)]
+        layers: LayerArgs,
+    },
+    /// Add or update an allowlist entry.
+    Add {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Model identifier (e.g. `all-minilm-l6-v2`).
+        #[arg(long)]
+        model: String,
+        /// Model revision/version (default: `main`).
+        #[arg(long)]
+        revision: Option<String>,
+        /// Expected SHA-256 (lowercase hex) for the downloaded model bytes.
+        #[arg(long)]
+        sha256: String,
+    },
+    /// Remove an allowlist entry.
+    Remove {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+        /// Model identifier (e.g. `all-minilm-l6-v2`).
+        #[arg(long)]
+        model: String,
+        /// Model revision/version (default: `main`).
+        #[arg(long)]
+        revision: Option<String>,
+    },
+    /// Clear the allowlist in the target layer (higher layers still apply).
+    Clear {
+        /// Destination scope to write to: `local` | `user` | `delta`.
+        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        scope: String,
+    },
+}
+
+#[derive(Subcommand)]
+/// Subcommands for reviewing and managing MCP promotion proposals.
+pub(crate) enum ProposalsCommand {
+    /// List proposals and their current status.
+    List {
+        /// Include accepted/rejected proposals (default shows only pending).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show a single proposal and its linked chunk.
+    Show {
+        /// Proposal id (chunk id of the `meta.proposal_event` record).
+        #[arg(long)]
+        id: u32,
+    },
+    /// Accept proposals by promoting their chunks into the user layer.
+    Accept {
+        /// Comma-separated proposal ids to accept.
+        #[arg(long)]
+        ids: String,
+        /// Skip ids already present in the user layer instead of erroring.
+        #[arg(long)]
+        skip_existing: bool,
+        /// Assume \"yes\" for interactive confirmation prompts.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Reject proposals without promoting them.
+    Reject {
+        /// Comma-separated proposal ids to reject.
+        #[arg(long)]
+        ids: String,
+        /// Optional rejection reason to record.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+/// Represents a toggle state, either on or off.
+pub(crate) enum Toggle {
+    On,
+    Off,
 }
 
 #[cfg(test)]
@@ -252,7 +498,7 @@ mod tests {
                 assert_eq!(root, ".");
                 assert_eq!(out, "AGENTS.db");
                 assert_eq!(kind, "canonical");
-                assert_eq!(dim, 128);
+                assert_eq!(dim, None);
                 assert_eq!(element_type, "f32");
                 assert_eq!(quant_scale, None);
             }
@@ -302,6 +548,27 @@ mod tests {
     }
 
     #[test]
+    fn index_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "index", "--base", "AGENTS.db"])
+            .expect("parse should succeed");
+        match cli.cmd {
+            Command::Index {
+                layers,
+                out_dir,
+                store_embeddings_f32,
+            } => {
+                assert_eq!(layers.base, Some("AGENTS.db".to_string()));
+                assert_eq!(layers.user, None);
+                assert_eq!(layers.delta, None);
+                assert_eq!(layers.local, None);
+                assert_eq!(out_dir, None);
+                assert!(!store_embeddings_f32);
+            }
+            _ => panic!("expected index command"),
+        }
+    }
+
+    #[test]
     fn web_parses_defaults() {
         let cli = Cli::try_parse_from(["agentsdb", "web"]).expect("parse should succeed");
         match cli.cmd {
@@ -310,6 +577,43 @@ mod tests {
                 assert_eq!(bind, "127.0.0.1:3030");
             }
             _ => panic!("expected web command"),
+        }
+    }
+
+    #[test]
+    fn options_parses_defaults() {
+        let cli =
+            Cli::try_parse_from(["agentsdb", "options", "show"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::Options { dir, cmd } => {
+                assert_eq!(dir, ".");
+                match cmd {
+                    OptionsCommand::Show { layers } => {
+                        assert_eq!(layers.base, None);
+                        assert_eq!(layers.user, None);
+                        assert_eq!(layers.delta, None);
+                        assert_eq!(layers.local, None);
+                    }
+                    _ => panic!("expected show subcommand"),
+                }
+            }
+            _ => panic!("expected options command"),
+        }
+    }
+
+    #[test]
+    fn options_wizard_parses_defaults() {
+        let cli =
+            Cli::try_parse_from(["agentsdb", "options", "wizard"]).expect("parse should succeed");
+        match cli.cmd {
+            Command::Options { dir, cmd } => {
+                assert_eq!(dir, ".");
+                match cmd {
+                    OptionsCommand::Wizard { scope } => assert_eq!(scope, "local"),
+                    _ => panic!("expected wizard subcommand"),
+                }
+            }
+            _ => panic!("expected options command"),
         }
     }
 

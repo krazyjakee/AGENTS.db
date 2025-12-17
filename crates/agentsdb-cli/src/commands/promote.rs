@@ -1,7 +1,5 @@
-use anyhow::Context;
 use serde::Serialize;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::io::IsTerminal;
 
 use crate::util::parse_ids_csv;
 
@@ -9,6 +7,9 @@ pub(crate) fn cmd_promote(
     from_path: &str,
     to_path: &str,
     ids: &str,
+    skip_existing: bool,
+    tombstone_source: bool,
+    yes: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let wanted = parse_ids_csv(ids)?;
@@ -16,43 +17,37 @@ pub(crate) fn cmd_promote(
         anyhow::bail!("--ids must be non-empty");
     }
 
-    agentsdb_format::ensure_writable_layer_path_allow_user(to_path).context("permission check")?;
-
-    let from_file =
-        agentsdb_format::LayerFile::open(from_path).with_context(|| format!("open {from_path}"))?;
-    let from_schema = agentsdb_format::schema_of(&from_file);
-    let from_chunks = agentsdb_format::read_all_chunks(&from_file)?;
-
-    let by_id: BTreeMap<u32, agentsdb_format::ChunkInput> =
-        from_chunks.into_iter().map(|c| (c.id, c)).collect();
-
-    let mut promote = Vec::new();
-    for id in &wanted {
-        let Some(c) = by_id.get(id) else {
-            anyhow::bail!("id {id} not found in {from_path}");
-        };
-        let mut c = c.clone();
-        if c.author != "human" {
-            c.author = "human".to_string();
+    // Prompt for confirmation if writing to user layer and not in non-interactive mode
+    if !yes
+        && !json
+        && std::path::Path::new(to_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            == Some("AGENTS.user.db")
+        && std::io::stdin().is_terminal()
+    {
+        eprint!(
+            "Promote {} chunks into {to_path}? This is a durable, append-only layer. [y/N] ",
+            wanted.len()
+        );
+        use std::io::Write;
+        std::io::stderr().flush().ok();
+        let mut s = String::new();
+        std::io::stdin().read_line(&mut s).ok();
+        let s = s.trim().to_ascii_lowercase();
+        if s != "y" && s != "yes" {
+            anyhow::bail!("aborted");
         }
-        promote.push(c);
     }
 
-    let to_p = Path::new(to_path);
-    if to_p.exists() {
-        let to_file =
-            agentsdb_format::LayerFile::open(to_path).with_context(|| format!("open {to_path}"))?;
-        let to_schema = agentsdb_format::schema_of(&to_file);
-        if to_schema.dim != from_schema.dim
-            || to_schema.element_type != from_schema.element_type
-            || to_schema.quant_scale.to_bits() != from_schema.quant_scale.to_bits()
-        {
-            anyhow::bail!("schema mismatch between {from_path} and {to_path}");
-        }
-        agentsdb_format::append_layer_atomic(to_path, &mut promote).context("append")?;
-    } else {
-        agentsdb_format::write_layer_atomic(to_path, &from_schema, &promote).context("write")?;
-    }
+    // Use shared promote operation
+    let out = agentsdb_ops::promote::promote_chunks(
+        from_path,
+        to_path,
+        &wanted,
+        skip_existing,
+        tombstone_source,
+    )?;
 
     if json {
         #[derive(Serialize)]
@@ -60,7 +55,9 @@ pub(crate) fn cmd_promote(
             ok: bool,
             from: &'a str,
             to: &'a str,
-            ids: Vec<u32>,
+            promoted: Vec<u32>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            skipped: Vec<u32>,
         }
         println!(
             "{}",
@@ -68,14 +65,25 @@ pub(crate) fn cmd_promote(
                 ok: true,
                 from: from_path,
                 to: to_path,
-                ids: wanted,
+                promoted: out.promoted,
+                skipped: out.skipped,
             })?
         );
     } else {
-        println!(
-            "Promoted {} chunks from {from_path} to {to_path}",
-            wanted.len()
-        );
+        if out.promoted.is_empty() {
+            println!("No chunks to promote (all requested ids already exist in {to_path})");
+        } else {
+            println!(
+                "Promoted {} chunks from {from_path} to {to_path}",
+                out.promoted.len()
+            );
+        }
+        if !out.skipped.is_empty() {
+            println!(
+                "Skipped {} ids already present in destination",
+                out.skipped.len()
+            );
+        }
     }
 
     Ok(())

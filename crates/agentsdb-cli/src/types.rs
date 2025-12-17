@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
+/// Represents the JSON output structure for the `validate` command.
 pub(crate) struct ValidateJson<'a> {
     pub(crate) ok: bool,
     pub(crate) path: &'a str,
@@ -8,6 +9,7 @@ pub(crate) struct ValidateJson<'a> {
 }
 
 #[derive(Serialize)]
+/// Represents the JSON output structure for the `clean` command.
 pub(crate) struct CleanJson<'a> {
     pub(crate) root: &'a str,
     pub(crate) dry_run: bool,
@@ -15,6 +17,7 @@ pub(crate) struct CleanJson<'a> {
 }
 
 #[derive(Serialize)]
+/// Represents a single entry in the JSON output for the `list` command.
 pub(crate) struct ListEntryJson {
     pub(crate) path: String,
     pub(crate) chunk_count: u64,
@@ -22,6 +25,7 @@ pub(crate) struct ListEntryJson {
 }
 
 #[derive(Serialize)]
+/// Represents the JSON output structure for the `inspect` command.
 pub(crate) struct InspectJson<'a> {
     pub(crate) path: &'a str,
     pub(crate) header: HeaderJson,
@@ -33,6 +37,7 @@ pub(crate) struct InspectJson<'a> {
 }
 
 #[derive(Serialize)]
+/// Represents the header information of an AGENTS.db layer in JSON format.
 pub(crate) struct HeaderJson {
     pub(crate) magic: u32,
     pub(crate) version_major: u16,
@@ -44,6 +49,7 @@ pub(crate) struct HeaderJson {
 }
 
 #[derive(Serialize)]
+/// Represents a section's metadata within an AGENTS.db layer in JSON format.
 pub(crate) struct SectionJson {
     pub(crate) kind: String,
     pub(crate) offset: u64,
@@ -51,6 +57,7 @@ pub(crate) struct SectionJson {
 }
 
 #[derive(Serialize)]
+/// Represents embedding-related metadata within an AGENTS.db layer in JSON format.
 pub(crate) struct EmbeddingJson {
     pub(crate) row_count: u64,
     pub(crate) dim: u32,
@@ -61,6 +68,7 @@ pub(crate) struct EmbeddingJson {
 }
 
 #[derive(Serialize)]
+/// Represents the JSON output structure for the `search` command.
 pub(crate) struct SearchJson {
     pub(crate) query_dim: usize,
     pub(crate) k: usize,
@@ -68,6 +76,7 @@ pub(crate) struct SearchJson {
 }
 
 #[derive(Serialize)]
+/// Represents a single search result entry in the JSON output for the `search` command.
 pub(crate) struct SearchResultJson {
     pub(crate) layer: String,
     pub(crate) id: u32,
@@ -82,12 +91,14 @@ pub(crate) struct SearchResultJson {
 }
 
 #[derive(Deserialize)]
+/// Represents the input JSON structure for the `compile` command.
 pub(crate) struct CompileInput {
     pub(crate) schema: CompileSchema,
     pub(crate) chunks: Vec<CompileChunk>,
 }
 
 #[derive(Deserialize)]
+/// Represents the schema information within the `compile` command's input JSON.
 pub(crate) struct CompileSchema {
     pub(crate) dim: u32,
     pub(crate) element_type: String, // "f32" | "i8"
@@ -95,6 +106,7 @@ pub(crate) struct CompileSchema {
 }
 
 #[derive(Deserialize)]
+/// Represents a single chunk within the `compile` command's input JSON.
 pub(crate) struct CompileChunk {
     pub(crate) id: u32,
     pub(crate) kind: String,
@@ -110,6 +122,7 @@ pub(crate) struct CompileChunk {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
+/// Represents a source reference for a compiled chunk, which can be a string or a chunk ID.
 pub(crate) enum CompileSource {
     String(String),
     Chunk { chunk_id: u32 },
