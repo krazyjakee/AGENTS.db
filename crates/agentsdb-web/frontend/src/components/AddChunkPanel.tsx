@@ -21,6 +21,7 @@ export function AddChunkPanel({
   const [sources, setSources] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
@@ -49,11 +50,7 @@ export function AddChunkPanel({
     try {
       setSubmitting(true);
       await onSubmit(data);
-      // Reset form on success
-      setContent('');
-      setSources('');
-      setKind('note');
-      setConfidence(0.8);
+      onCancel();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -62,17 +59,35 @@ export function AddChunkPanel({
   };
 
   return (
-    <div class="card bg-base-200 shadow-xl mb-4">
-      <div class="card-body">
-        <div class="flex justify-between items-center">
-          <h2 class="card-title">Add New Chunk</h2>
-          <button class="btn btn-sm btn-circle btn-ghost" onClick={onCancel}>
-            ✕
-          </button>
+    <dialog class="modal modal-open">
+      <div class={`modal-box ${isMaximized ? 'w-screen h-screen max-w-none max-h-none m-0 rounded-none' : 'max-w-4xl'}`}>
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="font-bold text-lg">Add New Chunk</h3>
+          <div class="flex gap-1">
+            <button
+              class="btn btn-sm btn-circle btn-ghost"
+              onClick={() => setIsMaximized(!isMaximized)}
+              disabled={submitting}
+              title={isMaximized ? "Restore" : "Maximize"}
+            >
+              {isMaximized ? (
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                </svg>
+              ) : (
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                </svg>
+              )}
+            </button>
+            <button class="btn btn-sm btn-circle btn-ghost" onClick={onCancel} disabled={submitting}>
+              ✕
+            </button>
+          </div>
         </div>
 
         {error && (
-          <div class="alert alert-error">
+          <div class="alert alert-error mb-4">
             <span>{error}</span>
           </div>
         )}
@@ -160,7 +175,7 @@ export function AddChunkPanel({
             />
           </div>
 
-          <div class="flex gap-2 mt-6">
+          <div class="modal-action">
             <button type="submit" class="btn btn-primary" disabled={submitting}>
               {submitting ? <span class="loading loading-spinner"></span> : 'Add Chunk'}
             </button>
@@ -170,6 +185,9 @@ export function AddChunkPanel({
           </div>
         </form>
       </div>
-    </div>
+      <form method="dialog" class="modal-backdrop" onClick={onCancel}>
+        <button>close</button>
+      </form>
+    </dialog>
   );
 }

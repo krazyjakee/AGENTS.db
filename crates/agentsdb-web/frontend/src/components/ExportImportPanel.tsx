@@ -84,10 +84,10 @@ export function ExportImportPanel({
   };
 
   return (
-    <div class="card bg-base-200 shadow-xl mb-4">
-      <div class="card-body">
+    <dialog class="modal modal-open">
+      <div class="modal-box max-w-3xl">
         <div class="flex justify-between items-center mb-4">
-          <h2 class="card-title">Export / Import</h2>
+          <h2 class="font-bold text-lg">Export / Import</h2>
           <button class="btn btn-sm btn-circle btn-ghost" onClick={onClose}>
             ✕
           </button>
@@ -288,6 +288,9 @@ export function ExportImportPanel({
           </form>
         )}
       </div>
-    </div>
+      <form method="dialog" class="modal-backdrop" onClick={onClose}>
+        <button>close</button>
+      </form>
+    </dialog>
   );
 }

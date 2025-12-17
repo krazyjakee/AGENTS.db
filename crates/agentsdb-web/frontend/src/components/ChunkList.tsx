@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'preact/hooks';
-import type { ChunkSummary, SearchResultJson } from '../types';
+import type { ChunkSummary, SearchResultJson, LayerMeta } from '../types';
 import { api } from '../api';
 
 interface ChunkListProps {
@@ -10,10 +10,16 @@ interface ChunkListProps {
   loading?: boolean;
   selectedLayer: string;
   kindFilter?: string;
+  includeRemoved?: boolean;
+  layerMeta?: LayerMeta | null;
   onViewChunk: (chunk: ChunkSummary) => void;
   onEditChunk: (chunk: ChunkSummary) => void;
   onRemoveChunk: (chunk: ChunkSummary) => void;
   onPageChange: (newOffset: number) => void;
+  onKindFilterChange?: (kind: string) => void;
+  onIncludeRemovedChange?: (include: boolean) => void;
+  onLoad?: () => void;
+  onAdd?: () => void;
 }
 
 export function ChunkList({
@@ -24,10 +30,16 @@ export function ChunkList({
   loading = false,
   selectedLayer,
   kindFilter = '',
+  includeRemoved = false,
+  layerMeta = null,
   onViewChunk,
   onEditChunk,
   onRemoveChunk,
   onPageChange,
+  onKindFilterChange,
+  onIncludeRemovedChange,
+  onLoad,
+  onAdd,
 }: ChunkListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<'filter' | 'search'>('search');
@@ -116,33 +128,112 @@ export function ChunkList({
     <div class="card bg-base-200 shadow-xl mb-4">
       <div class="card-body">
         <div class="flex flex-col gap-4 mb-4">
-          {/* Mode Toggle */}
-          <div class="flex justify-between items-center">
+          {/* Mode Toggle with Filters & Actions on same line */}
+          <div class="flex flex-wrap items-center gap-3">
             <div class="join">
               <button
                 class={`join-item btn btn-sm ${searchMode === 'search' ? 'btn-active' : ''}`}
                 onClick={() => setSearchMode('search')}
               >
-                Search (semantic)
+                Search
               </button>
               <button
                 class={`join-item btn btn-sm ${searchMode === 'filter' ? 'btn-active' : ''}`}
                 onClick={() => setSearchMode('filter')}
               >
-                Filter (current page)
+                Filter
               </button>
             </div>
-            {searchMode === 'search' && (
-              <div class="text-xs text-base-content/60">
-                Searches entire layer using vector similarity
+
+            {onKindFilterChange && (
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold">Kind:</span>
+                <select
+                  class="select select-bordered select-sm"
+                  value={kindFilter}
+                  onChange={(e) => onKindFilterChange((e.target as HTMLSelectElement).value)}
+                >
+                  <option value="">(all)</option>
+                  {layerMeta &&
+                    Object.keys(layerMeta.kinds).map((kind) => (
+                      <option key={kind} value={kind}>
+                        {kind}
+                      </option>
+                    ))}
+                </select>
               </div>
             )}
+
+            {onIncludeRemovedChange && (
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold">Removed:</span>
+                <div class="flex gap-2">
+                  <label class="label cursor-pointer gap-1 p-0">
+                    <input
+                      type="radio"
+                      name="includeRemoved"
+                      class="radio radio-primary radio-sm"
+                      checked={!includeRemoved}
+                      onChange={() => onIncludeRemovedChange(false)}
+                    />
+                    <span class="label-text text-sm">No</span>
+                  </label>
+                  <label class="label cursor-pointer gap-1 p-0 ml-2">
+                    <input
+                      type="radio"
+                      name="includeRemoved"
+                      class="radio radio-primary radio-sm"
+                      checked={includeRemoved}
+                      onChange={() => onIncludeRemovedChange(true)}
+                    />
+                    <span class="label-text text-sm">Yes</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <div class="flex gap-2 ml-auto">
+              {onLoad && (
+                <button onClick={onLoad} class="btn btn-primary btn-sm">
+                  <svg
+                    class="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    <path d="M21 3v6h-6" />
+                  </svg>
+                  Load
+                </button>
+              )}
+              {onAdd && (
+                <button onClick={onAdd} class="btn btn-secondary btn-sm">
+                  <svg
+                    class="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  Add
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Search Input */}
           <div class="form-control w-full">
-            <div class="input-group">
-              <span class="bg-base-300">
+            <div class="flex items-center gap-0">
+              <label class="flex items-center justify-center bg-base-300 border border-base-300 rounded-l-lg px-3 h-12">
                 <svg
                   class="h-5 w-5"
                   viewBox="0 0 24 24"
@@ -155,7 +246,7 @@ export function ChunkList({
                   <circle cx="11" cy="11" r="8" />
                   <path d="m21 21-4.35-4.35" />
                 </svg>
-              </span>
+              </label>
               <input
                 type="text"
                 placeholder={
@@ -163,7 +254,7 @@ export function ChunkList({
                     ? 'Search chunks by ID, kind, content, or confidence...'
                     : 'Semantic search across entire layer...'
                 }
-                class="input input-bordered w-full"
+                class="input input-bordered flex-1 rounded-none border-l-0"
                 value={searchQuery}
                 onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
                 onKeyPress={(e) => {
@@ -174,7 +265,7 @@ export function ChunkList({
               />
               {searchQuery && (
                 <button
-                  class="btn btn-square"
+                  class="btn btn-square rounded-l-none"
                   onClick={() => {
                     setSearchQuery('');
                     setSearchResults([]);

@@ -12,6 +12,7 @@ interface ChunkViewerProps {
 
 export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: ChunkViewerProps) {
   const [showRaw, setShowRaw] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
 
   if (!chunk) return null;
 
@@ -22,7 +23,7 @@ export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: Ch
 
   return (
     <dialog class="modal modal-open">
-      <div class="modal-box max-w-5xl max-h-[90vh]">
+      <div class={`modal-box ${isMaximized ? 'w-screen h-screen max-w-none max-h-none m-0 rounded-none' : 'max-w-5xl max-h-[90vh]'}`}>
         <div class="flex justify-between items-start mb-4">
           <div class="flex-1">
             <h3 class="font-bold text-xl mb-2 flex items-center gap-2">
@@ -66,9 +67,26 @@ export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: Ch
               </span>
             </div>
           </div>
-          <button class="btn btn-sm btn-circle btn-ghost" onClick={onClose}>
-            ✕
-          </button>
+          <div class="flex gap-1">
+            <button
+              class="btn btn-sm btn-circle btn-ghost"
+              onClick={() => setIsMaximized(!isMaximized)}
+              title={isMaximized ? "Restore" : "Maximize"}
+            >
+              {isMaximized ? (
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                </svg>
+              ) : (
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                </svg>
+              )}
+            </button>
+            <button class="btn btn-sm btn-circle btn-ghost" onClick={onClose}>
+              ✕
+            </button>
+          </div>
         </div>
 
         {chunk.sources && chunk.sources.length > 0 && (

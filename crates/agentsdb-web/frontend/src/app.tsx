@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
 import { Header } from './components/Header';
-import { LayerSelector } from './components/LayerSelector';
 import { LayerMetadataModal } from './components/LayerMetadataModal';
 import { ChunkList } from './components/ChunkList';
 import { ChunkViewer } from './components/ChunkViewer';
@@ -299,6 +298,7 @@ export function App() {
         selectedLayer={selectedLayer}
         onLayerChange={setSelectedLayer}
         onShowMetadata={() => setShowMetadata(true)}
+        onShowExportImport={() => setShowExportImport(true)}
       />
 
       <main class="container mx-auto p-4 flex-1">
@@ -311,16 +311,6 @@ export function App() {
           </div>
         )}
 
-        <LayerSelector
-          layerMeta={layerMeta}
-          kindFilter={kindFilter}
-          includeRemoved={includeRemoved}
-          onKindFilterChange={setKindFilter}
-          onIncludeRemovedChange={setIncludeRemoved}
-          onLoad={loadChunks}
-          onAdd={() => setShowAddPanel(!showAddPanel)}
-        />
-
         {showAddPanel && (
           <AddChunkPanel
             selectedLayer={selectedLayer}
@@ -330,25 +320,6 @@ export function App() {
           />
         )}
 
-        {showExportImport && (
-          <ExportImportPanel
-            selectedLayer={selectedLayer}
-            embeddingDim={layerMeta?.embedding_dim}
-            onExport={handleExport}
-            onImport={handleImport}
-            onClose={() => setShowExportImport(false)}
-          />
-        )}
-
-        <div class="flex gap-2 mb-4">
-          <button
-            class="btn btn-sm btn-outline"
-            onClick={() => setShowExportImport(!showExportImport)}
-          >
-            {showExportImport ? 'Hide' : 'Show'} Export/Import
-          </button>
-        </div>
-
         <ChunkList
           chunks={chunks}
           total={total}
@@ -357,10 +328,16 @@ export function App() {
           loading={loading}
           selectedLayer={selectedLayer}
           kindFilter={kindFilter}
+          includeRemoved={includeRemoved}
+          layerMeta={layerMeta}
           onViewChunk={handleViewChunk}
           onEditChunk={handleEditChunk}
           onRemoveChunk={handleRemoveChunk}
           onPageChange={setOffset}
+          onKindFilterChange={setKindFilter}
+          onIncludeRemovedChange={setIncludeRemoved}
+          onLoad={loadChunks}
+          onAdd={() => setShowAddPanel(!showAddPanel)}
         />
 
         {proposals.length > 0 && (
@@ -408,6 +385,16 @@ export function App() {
         <LayerMetadataModal
           layerMeta={layerMeta}
           onClose={() => setShowMetadata(false)}
+        />
+      )}
+
+      {showExportImport && (
+        <ExportImportPanel
+          selectedLayer={selectedLayer}
+          embeddingDim={layerMeta?.embedding_dim}
+          onExport={handleExport}
+          onImport={handleImport}
+          onClose={() => setShowExportImport(false)}
         />
       )}
     </div>
