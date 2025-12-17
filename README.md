@@ -4,13 +4,13 @@
   <img src="https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/crates/agentsdb-web/assets/logo.png" alt="logo" />
 </p>
 
-AGENTS.db is a file format and toolkit for creating, inspecting, and querying immutable, layered documentation databases—built for deterministic context storage.
+AGENTS.db is a vectorized, flatfile database for your LLM to query and store context.
 
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/krazyjakee?label=sponsors&style=for-the-badge)](https://github.com/sponsors/krazyjakee) [![GitHub Stars](https://img.shields.io/github/stars/krazyjakee/AGENTS.db?style=for-the-badge&color=yellow)](https://github.com/krazyjakee/AGENTS.db)
 
 ![Alt](https://repobeats.axiom.co/api/embed/754b9c5db54aa484d2f93d9d3c943766b33ac869.svg "Repobeats analytics image")
 
-It’s designed for agent systems and MCP servers that need:
+It’s designed for agent systems that need:
 
 - A **read-only, canonical** knowledge base (the Base layer).
 - **Append-only layers** for new notes, derived summaries, and proposals.
@@ -23,7 +23,7 @@ This repo is currently targeting the spec in `docs/RFC.md`.
 
 Think of your project knowledge as “chunks” stored in layer files:
 
-- **Base**: `AGENTS.db` (immutable; built by a compiler).
+- **Base**: `AGENTS.db` (immutable; source of the truest truth).
 - **User**: `AGENTS.user.db` (append-only; durable human additions).
 - **Delta**: `AGENTS.delta.db` (append-only; reviewable proposed additions).
 - **Local**: `AGENTS.local.db` (append-only; ephemeral/session notes).
@@ -36,8 +36,6 @@ The key safety rule: tooling **must not modify `AGENTS.db` in place**.
 
 ## Quickstart (CLI)
 
-The CLI binary is named `agentsdb` and lives in `crates/agentsdb-cli/`.
-
 Install a prebuilt release (macOS/Linux/Windows via Git Bash) into `~/.local/bin`:
 
 ```sh
@@ -45,23 +43,24 @@ curl -fsSL https://raw.githubusercontent.com/krazyjakee/AGENTS.db/main/scripts/i
 agentsdb --help
 ```
 
-Install it locally (macOS/Linux/Windows via Git Bash or WSL):
+Get setup:
+
+Set up your embedding options. This stores the options in AGENTS.local.db which isn't supposed to be committed to source control.
 
 ```sh
-bash scripts/install-cli.sh
-agentsdb --help
+agentsdb options wizard
 ```
 
-Install to a specific prefix (builds then copies the binary into `PREFIX/bin`):
+This scans your repo for common documentation files (wide net) and creates `AGENTS.db`, your source of absolute truth.
 
 ```sh
-bash scripts/install-cli.sh --prefix "$HOME/.local" --force
+agentsdb init
 ```
 
-Build it:
+Promote your options to store them permanently in AGENTS.user.db.
 
 ```sh
-cargo build -p agentsdb-cli
+agentsdb promote --from AGENTS.local.db --to AGENTS.user.db --ids 1
 ```
 
 See available commands:
@@ -70,15 +69,9 @@ See available commands:
 agentsdb --help
 ```
 
-### 1) Init (wide collect + compile)
+### Add more files
 
-This scans your repo for common documentation files (wide net) and directly writes `AGENTS.db`.
-
-```sh
-agentsdb init
-```
-
-#### Or manually collect and compile canonical sources
+The easiest way to add more content is to run the mcp (`agentsdb serve`) and have your llm add the content. If you want to do it manually, you can also use the web ui (`agentsdb web`) or just use the CLI.
 
 Compile directly from file paths and/or inline text (no intermediate JSON manifest).
 
@@ -87,21 +80,23 @@ agentsdb compile --out AGENTS.db --dim 128 --element-type f32 AGENTS.md docs/RFC
 ```
 
 ```sh
-agentsdb compile --out AGENTS.db --text "Project note: layers are append-only."
+agentsdb compile --out AGENTS.local.db --text "Project note: layers are append-only."
 ```
 
 Notes:
 - If embeddings aren’t provided, `compile` uses the configured embedder from rolled-up options (default: deterministic built-in hash embedder).
 - `compile` appends to an existing `--out` file by default; use `--replace` to overwrite.
 
-### 3) Validate and inspect a layer file
+### Validate and inspect a layer file
 
 ```sh
 agentsdb validate AGENTS.db
 agentsdb inspect AGENTS.db
 ```
 
-### 4) Search
+### Search
+
+You use semantic search in the web ui, or using the CLI below.
 
 Search just the base layer:
 
@@ -120,29 +115,7 @@ agentsdb search \
   --query "what is precedence?" -k 5
 ```
 
-### 5) Append a chunk to a writable layer
-
-Write to the Local or Delta layer (the CLI enforces the expected filenames).
-
-Create/append to `AGENTS.local.db`:
-
-```sh
-agentsdb write AGENTS.local.db \
-  --scope local \
-  --kind derived-summary \
-  --content "This repo treats AGENTS.db as immutable; writes go to local/delta." \
-  --confidence 0.7 \
-  --dim 128 \
-  --source "docs/RFC.md:1"
-```
-
-Then search including local results:
-
-```sh
-agentsdb search --base AGENTS.db --local AGENTS.local.db --query "immutable" -k 5
-```
-
-### 6) Import/Export (JSON/NDJSON)
+### Import/Export (JSON/NDJSON)
 
 Export layers to a stable JSON/NDJSON format:
 
@@ -162,31 +135,7 @@ Dangerous escape hatch (writes to `AGENTS.db`):
 agentsdb import --dir . --in agentsdb-export.json --allow-base
 ```
 
-See `docs/Export.md` for the schema and details.
-
-## Options (config records)
-
-Embedding behavior is configured via append-only **options records** stored in layer files and rolled up with precedence:
-
-`AGENTS.local.db > AGENTS.user.db > AGENTS.delta.db > AGENTS.db`
-
-- Options are stored as chunks with `kind=options` and JSON `content`.
-- Options records are excluded from search results by default (unless you pass `--kind options`).
-
-Current options schema (partial; more keys may be added later):
-
-```json
-{
-  "embedding": {
-    "backend": "hash",
-    "dim": 128,
-    "model": null,
-    "revision": null,
-    "cache_enabled": false,
-    "cache_dir": null
-  }
-}
-```
+### Options
 
 Show the effective rolled-up options (and which layer provided the last patch):
 
@@ -225,13 +174,13 @@ agentsdb write AGENTS.local.db \
 
 ### Embedding backends
 
-By default, `agentsdb` uses the deterministic offline `hash` embedder. Additional backends are feature-gated and require rebuilding:
+By default, `agentsdb` uses the `all-minilm-l6-v2` model. Additional backends are described below:
 
 ```sh
 cargo build -p agentsdb-cli --features all-embedders
 ```
 
-Backends supported when enabled: `ort`, `candle`, `openai`, `voyage`, `cohere`, `anthropic`, `bedrock`, `gemini`.
+Backends supported when enabled: `hash`, `ort`, `candle`, `openai`, `voyage`, `cohere`, `anthropic`, `bedrock`, `gemini`.
 
 Remote providers read the API key from an env var (defaults: `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `COHERE_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`), configurable via `agentsdb options set --api-key-env ...`.
 
@@ -243,6 +192,8 @@ Local model downloads can be pinned/verified:
 agentsdb options allowlist list
 agentsdb options allowlist add --scope local --model all-minilm-l6-v2 --revision main --sha256 <sha256>
 ```
+
+**Offline backends**: You don't *need* a model to embed documents in agentsdb. In this case, use the `hash` backend and set your `dim` to 128.
 
 ## Editing and tombstones
 
@@ -316,17 +267,6 @@ Add an MCP server (defaults to `--scope project`):
 gemini mcp add --transport stdio --scope project agentsdb agentsdb serve --base "$PWD/AGENTS.db" --local "$PWD/AGENTS.local.db" --delta "$PWD/AGENTS.delta.db"
 ```
 
-## Repository layout
-
-- `crates/agentsdb-core/`: shared types, errors, embedding utilities.
-- `crates/agentsdb-embeddings/`: embedder backends + deterministic cache + options roll-up (`hash` by default; feature-gated `ort`/`candle`/`openai`/`voyage`/`cohere`).
-- `crates/agentsdb-format/`: `AGENTS.db` file reader/writer.
-- `crates/agentsdb-query/`: query engine across one or more layers.
-- `crates/agentsdb-mcp/`: MCP server library.
-- `crates/agentsdb-web/`: Web UI server + embedded assets.
-- `crates/agentsdb-cli/`: `agentsdb` CLI binary.
-- `docs/`: spec and implementation plan (`docs/RFC.md`, `docs/Reference Implementation.md`).
-
 ## Development
 
 Common commands:
@@ -341,9 +281,7 @@ cargo clippy --all-targets --all-features
 
 - Spec and semantics: `docs/RFC.md`
 - Planned scope: `docs/Reference Implementation.md`
-- Import/Export schema: `docs/Export.md`
-- Embeddings: `embedding.md`
-- Looking for a workflow/mental model of how to lean into this approach? See `WORKFLOW.md`
+- Looking for a workflow/mental model of how to lean into this approach? See `docs/WORKFLOW.md`
 
 ## License
 

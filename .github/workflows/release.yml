@@ -50,6 +50,10 @@ jobs:
           npm run build
 
       - name: Build
+        env:
+          # Force dynamic C runtime on Windows to match ONNX Runtime binaries
+          CFLAGS: ${{ runner.os == 'Windows' && '/MD' || '' }}
+          CXXFLAGS: ${{ runner.os == 'Windows' && '/MD' || '' }}
         run: cargo build -p agentsdb-cli --release --locked --target ${{ matrix.target }} --features all-embedders
 
       - name: Package (unix)
