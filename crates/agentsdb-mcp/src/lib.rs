@@ -577,7 +577,7 @@ fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<
             .unwrap_or_else(|| vec![0.0; dim]),
     };
     let query = SearchQuery {
-        embedding: embedding.clone(),
+        embedding,
         k,
         filters,
     };

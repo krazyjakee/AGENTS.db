@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Header } from './components/Header';
 import { LayerMetadataModal } from './components/LayerMetadataModal';
 import { ChunkList } from './components/ChunkList';
@@ -18,6 +18,23 @@ import type {
   ImportRequest,
 } from './types';
 import { api } from './api';
+
+// Custom hook for error handling in async operations
+function useErrorHandler(setError: (error: string | null) => void) {
+  return useCallback(
+    async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        const result = await fn();
+        setError(null);
+        return result;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        return undefined;
+      }
+    },
+    [setError]
+  );
+}
 
 export function App() {
   // Layer state
@@ -48,9 +65,12 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Error handler hook
+  const withErrorHandling = useErrorHandler(setError);
+
   // Refresh functions
   const refreshLayers = async () => {
-    try {
+    await withErrorHandling(async () => {
       const layersList = await api.getLayers();
       setLayers(layersList);
       if (!selectedLayer && layersList.length > 0) {
@@ -59,9 +79,7 @@ export function App() {
           setSelectedLayer(first.path);
         }
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    });
   };
 
   const refreshMeta = async () => {
@@ -69,12 +87,10 @@ export function App() {
       setLayerMeta(null);
       return;
     }
-    try {
+    await withErrorHandling(async () => {
       const meta = await api.getLayerMeta(selectedLayer);
       setLayerMeta(meta);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    });
   };
 
   const loadChunks = async () => {
@@ -83,8 +99,8 @@ export function App() {
       setTotal(0);
       return;
     }
-    try {
-      setLoading(true);
+    setLoading(true);
+    await withErrorHandling(async () => {
       const response = await api.getChunks(
         selectedLayer,
         offset,
@@ -94,40 +110,31 @@ export function App() {
       );
       setChunks(response.items);
       setTotal(response.total);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+    });
+    setLoading(false);
   };
 
   const refreshProposals = async () => {
-    try {
+    await withErrorHandling(async () => {
       const proposalsList = await api.getProposals(false);
       setProposals(proposalsList);
-    } catch (err) {
-      console.error('Failed to load proposals:', err);
-    }
+    });
   };
 
   // Event handlers
   const handleViewChunk = async (chunk: ChunkSummary) => {
-    try {
+    await withErrorHandling(async () => {
       const full = await api.getChunk(selectedLayer, chunk.id);
       setViewingChunk(full);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    });
   };
 
   const handleEditChunk = async (chunk: ChunkSummary) => {
-    try {
+    await withErrorHandling(async () => {
       const full = await api.getChunk(selectedLayer, chunk.id);
       setEditingChunk(full);
       setViewingChunk(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    });
   };
 
   const handleRemoveChunk = async (chunk: ChunkSummary) => {
@@ -136,17 +143,14 @@ export function App() {
     );
     if (!confirmed) return;
 
-    try {
+    await withErrorHandling(async () => {
       await api.removeChunk({
         path: selectedLayer,
         scope: 'delta',
         id: chunk.id,
       });
       await loadChunks();
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    });
   };
 
   const handleAddChunk = async (data: AddChunkRequest) => {

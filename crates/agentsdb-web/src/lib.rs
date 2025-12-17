@@ -119,7 +119,7 @@ struct ChunkFull {
     removed: bool,
 }
 
-fn serve_static_file(path: &str) -> anyhow::Result<(String, Vec<u8>)> {
+fn serve_static_file(path: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
     let path = path.trim_start_matches('/');
 
     // Security check: ensure the path doesn't try to escape
@@ -147,7 +147,7 @@ fn serve_static_file(path: &str) -> anyhow::Result<(String, Vec<u8>)> {
         _ => "application/octet-stream",
     };
 
-    Ok((content_type.to_string(), content))
+    Ok((content_type, content))
 }
 
 fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyhow::Result<()> {
@@ -156,12 +156,12 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => {
             let (content_type, body) = serve_static_file("index.html").context("serve index.html")?;
-            write_response(stream, 200, &content_type, &body).context("write index")
+            write_response(stream, 200, content_type, &body).context("write index")
         }
         ("GET", path) if path.starts_with("/assets/") => {
             match serve_static_file(path) {
                 Ok((content_type, body)) => {
-                    write_response(stream, 200, &content_type, &body).context("write asset")
+                    write_response(stream, 200, content_type, &body).context("write asset")
                 }
                 Err(err) => write_response(
                     stream,
@@ -1266,8 +1266,8 @@ fn apply_proposal_event(map: &mut BTreeMap<u32, ProposalState>, event_id: u32, e
         "propose" => {
             let from_path = ev
                 .from_path
-                .unwrap_or_else(|| "AGENTS.delta.db".to_string());
-            let to_path = ev.to_path.unwrap_or_else(|| "AGENTS.user.db".to_string());
+                .unwrap_or_else(|| "AGENTS.delta.db".into());
+            let to_path = ev.to_path.unwrap_or_else(|| "AGENTS.user.db".into());
             map.insert(
                 event_id,
                 ProposalState {
@@ -1440,14 +1440,10 @@ fn list_proposals(st: &mut ServerState, include_all: bool) -> anyhow::Result<Vec
 fn record_proposal(st: &mut ServerState, input: ProposeInput) -> anyhow::Result<u32> {
     let from_path = input
         .from_path
-        .as_deref()
-        .unwrap_or("AGENTS.delta.db")
-        .to_string();
+        .unwrap_or_else(|| "AGENTS.delta.db".into());
     let to_path = input
         .to_path
-        .as_deref()
-        .unwrap_or("AGENTS.user.db")
-        .to_string();
+        .unwrap_or_else(|| "AGENTS.user.db".into());
 
     let is_allowed = match (from_path.as_str(), to_path.as_str()) {
         ("AGENTS.local.db", "AGENTS.delta.db") => true,

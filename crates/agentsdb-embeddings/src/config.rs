@@ -383,7 +383,7 @@ pub fn roll_up_embedding_options(
     layers_high_to_low: &[Option<&agentsdb_format::LayerFile>],
 ) -> anyhow::Result<ResolvedEmbeddingOptions> {
     let mut out = ResolvedEmbeddingOptions {
-        backend: "hash".to_string(),
+        backend: "hash".into(),
         model: None,
         revision: None,
         model_path: None,

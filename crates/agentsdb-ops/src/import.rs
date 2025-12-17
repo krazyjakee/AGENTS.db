@@ -33,8 +33,8 @@ pub fn parse_export_bytes(input: &[u8]) -> anyhow::Result<ExportBundleV1> {
 
     // NDJSON
     let mut tool = ExportToolInfo {
-        name: "unknown".to_string(),
-        version: "unknown".to_string(),
+        name: "unknown".into(),
+        version: "unknown".into(),
     };
     let mut layers: Vec<ExportLayerV1> = Vec::new();
     let mut layer_ix_by_path: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
