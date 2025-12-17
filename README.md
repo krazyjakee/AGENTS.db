@@ -21,18 +21,27 @@ This repo is currently targeting the spec in `docs/RFC.md`.
 
 ## The Big Idea
 
-Think of your project knowledge as “chunks” stored in layer files:
+AGENTS.**md** is a great standard - good job! However, beyond a small code base it quickly breaks down and the llm will need to start branching off to look elsewhere for the context it needs.
+
+AGENTS.**db** is a one stop shop for context. All the benefits of AGENTS.md but in a single, structured, vectorized, flatfile database.
+
+So why is it spread across multiple files? Think of your project knowledge as “chunks” stored in layer files that are source control safe:
 
 - **Base**: `AGENTS.db` (immutable; source of the truest truth).
 - **User**: `AGENTS.user.db` (append-only; durable human additions).
 - **Delta**: `AGENTS.delta.db` (append-only; reviewable proposed additions).
-- **Local**: `AGENTS.local.db` (append-only; ephemeral/session notes).
+- **Local**: `AGENTS.local.db` (append-only; ephemeral/session notes/Don't commit to source control).
 
 When searching across layers, higher-precedence layers win:
 
 `local > user > delta > base`
 
-The key safety rule: tooling **must not modify `AGENTS.db` in place**.
+**AGENTS.db is immutable? Why?**
+
+AGENTS.db is your absolute source of truth. It should contain real documentation from the code base, ideally written and verified by humans. Therefore, it should take top priority when the LLM is comparing 2 conflicting contexts.
+Use the `user` layer for good context, `delta` for proposed good context (like a pull request) and finally `local` for your own, personal context.
+
+For more information about how best to use layers, see `docs/WORKFLOW.md`
 
 ## Quickstart (CLI)
 
