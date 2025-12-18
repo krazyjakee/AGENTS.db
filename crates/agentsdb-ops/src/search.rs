@@ -1,7 +1,7 @@
 use anyhow::Context;
 use agentsdb_core::types::{SearchFilters, SearchResult};
 use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
-use agentsdb_query::{LayerSet, SearchOptions, SearchQuery};
+use agentsdb_query::{LayerSet, SearchMode, SearchOptions, SearchQuery};
 
 /// Configuration for a search operation
 #[derive(Debug, Clone)]
@@ -16,6 +16,8 @@ pub struct SearchConfig {
     pub kinds: Vec<String>,
     /// Whether to use ANN index if available
     pub use_index: bool,
+    /// Search mode: semantic only or hybrid (lexical + semantic)
+    pub mode: SearchMode,
 }
 
 /// Perform a search across opened layers
@@ -125,6 +127,7 @@ pub fn search_layers(
         filters: SearchFilters {
             kinds: config.kinds,
         },
+        query_text: config.query.clone(),
     };
 
     // Execute search
@@ -133,6 +136,7 @@ pub fn search_layers(
         &query,
         SearchOptions {
             use_index: config.use_index,
+            mode: config.mode,
         },
     )
     .context("search")?;

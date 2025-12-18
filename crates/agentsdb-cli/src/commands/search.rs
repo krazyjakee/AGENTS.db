@@ -1,7 +1,7 @@
 use anyhow::Context;
 
 use agentsdb_ops::{search_layers, SearchConfig};
-use agentsdb_query::LayerSet;
+use agentsdb_query::{LayerSet, SearchMode};
 
 use crate::types::{SearchJson, SearchResultJson};
 use crate::util::{layer_to_str, one_line, parse_vec_json, source_to_string};
@@ -14,6 +14,7 @@ pub(crate) fn cmd_search(
     k: usize,
     kinds: Vec<String>,
     use_index: bool,
+    mode: String,
     json: bool,
 ) -> anyhow::Result<()> {
     // Implements the `search` command, which searches one or more layers using vector similarity.
@@ -34,6 +35,16 @@ pub(crate) fn cmd_search(
         (None, None) => None,
     };
 
+    // Parse search mode
+    let search_mode = match mode.to_lowercase().as_str() {
+        "hybrid" => SearchMode::Hybrid,
+        "semantic" => SearchMode::Semantic,
+        _ => anyhow::bail!(
+            "invalid search mode '{}'; expected 'hybrid' or 'semantic'",
+            mode
+        ),
+    };
+
     // Use shared search operation
     let config = SearchConfig {
         query,
@@ -41,6 +52,7 @@ pub(crate) fn cmd_search(
         k,
         kinds,
         use_index,
+        mode: search_mode,
     };
 
     let results = search_layers(&layers, config).context("search")?;

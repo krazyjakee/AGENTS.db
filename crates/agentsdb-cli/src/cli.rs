@@ -179,6 +179,10 @@ pub(crate) enum Command {
         /// Use a rebuildable sidecar index (if present) to accelerate exact search.
         #[arg(long)]
         use_index: bool,
+
+        /// Search mode: hybrid (lexical + semantic) or semantic-only.
+        #[arg(long, default_value = "hybrid")]
+        mode: String,
     },
     /// Build a rebuildable sidecar index for one or more layers.
     Index {

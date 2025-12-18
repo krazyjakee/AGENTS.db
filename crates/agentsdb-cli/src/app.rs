@@ -96,6 +96,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             k,
             kinds,
             use_index,
+            mode,
         } => crate::commands::search::cmd_search(
             layerset(layers),
             query,
@@ -104,6 +105,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             k,
             kinds,
             use_index,
+            mode,
             json,
         ),
         Command::Index {

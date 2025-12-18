@@ -580,11 +580,15 @@ fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<
         embedding,
         k,
         filters,
+        query_text: Some(params.query),
     };
     let results = agentsdb_query::search_layers_with_options(
         &opened,
         &query,
-        agentsdb_query::SearchOptions { use_index: true },
+        agentsdb_query::SearchOptions {
+            use_index: true,
+            mode: agentsdb_query::SearchMode::Hybrid,
+        },
     )
     .context("search")?;
     Ok(serde_json::to_value(results)?)

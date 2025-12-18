@@ -824,6 +824,7 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
         k: input.k.unwrap_or(10),
         kinds: input.kinds.unwrap_or_default(),
         use_index: false,
+        mode: agentsdb_query::SearchMode::Hybrid,
     };
 
     let results = search_layers(&layer_set, config)?;
