@@ -1,9 +1,8 @@
 use anyhow::Context;
 use serde::Serialize;
 
-use agentsdb_embeddings::config::get_immutable_embedding_options;
 use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
-
+use crate::embedding_helpers::{create_layer_metadata, create_validated_embedder};
 use crate::util::parse_vec_json;
 
 #[allow(clippy::too_many_arguments)]
@@ -80,31 +79,13 @@ pub(crate) fn cmd_write(
         if embedding.is_empty() {
             let file = agentsdb_format::LayerFile::open(path).context("open layer")?;
             let dim = file.embedding_dim();
-            let options = get_immutable_embedding_options(dir)
-                .context("get immutable embedding options")?;
-            if let Some(cfg_dim) = options.dim {
-                if cfg_dim != dim {
-                    anyhow::bail!(
-                        "embedding dim mismatch (layer is dim={dim}, options specify dim={cfg_dim})"
-                    );
-                }
-            }
-            let embedder = options
-                .into_embedder(dim)
-                .context("resolve embedder from options")?;
+            let embedder = create_validated_embedder(dir, dim)?;
             chunk.embedding = embedder
                 .embed(&[chunk.content.clone()])?
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| vec![0.0; dim]);
-            let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
-                .with_embedder_metadata(embedder.metadata())
-                .with_tool("agentsdb-cli", env!("CARGO_PKG_VERSION"));
-            layer_metadata_json = Some(
-                layer_metadata
-                    .to_json_bytes()
-                    .context("serialize layer metadata")?,
-            );
+            layer_metadata_json = Some(create_layer_metadata(embedder.as_ref())?);
         }
         let mut chunks = vec![chunk];
         let file = agentsdb_format::LayerFile::open(path).context("open layer")?;
@@ -143,31 +124,13 @@ pub(crate) fn cmd_write(
             (None, false) => embedding.len(),
         };
         if chunk.embedding.is_empty() {
-            let options = get_immutable_embedding_options(dir)
-                .context("get immutable embedding options")?;
-            if let Some(cfg_dim) = options.dim {
-                if cfg_dim != dim {
-                    anyhow::bail!(
-                        "embedding dim mismatch (creating layer with dim={dim}, options specify dim={cfg_dim})"
-                    );
-                }
-            }
-            let embedder = options
-                .into_embedder(dim)
-                .context("resolve embedder from options")?;
+            let embedder = create_validated_embedder(dir, dim)?;
             chunk.embedding = embedder
                 .embed(&[chunk.content.clone()])?
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| vec![0.0; dim]);
-            let layer_metadata = LayerMetadataV1::new(embedder.profile().clone())
-                .with_embedder_metadata(embedder.metadata())
-                .with_tool("agentsdb-cli", env!("CARGO_PKG_VERSION"));
-            layer_metadata_json = Some(
-                layer_metadata
-                    .to_json_bytes()
-                    .context("serialize layer metadata")?,
-            );
+            layer_metadata_json = Some(create_layer_metadata(embedder.as_ref())?);
         }
         if chunk.id == 0 {
             chunk.id = 1;

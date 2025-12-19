@@ -4,6 +4,8 @@ use std::path::Path;
 
 use agentsdb_embeddings::config::{get_immutable_embedding_options, standard_layer_paths_for_dir};
 
+use crate::embedding_helpers::validate_layer_dimension;
+
 pub(crate) fn cmd_reembed(
     dir: &str,
     layers_csv: &str,
@@ -100,17 +102,7 @@ pub(crate) fn cmd_reembed(
         }
 
         // Check embedding dimension matches
-        if let Some(cfg_dim) = options.dim {
-            if schema.dim as usize != cfg_dim {
-                anyhow::bail!(
-                    "embedding dim mismatch for {} (layer has dim={}, options specify dim={}). \
-                    Cannot re-embed with different dimension.",
-                    layer_path.display(),
-                    schema.dim,
-                    cfg_dim
-                );
-            }
-        }
+        validate_layer_dimension(&schema, options.dim, layer_path)?;
 
         // Prepare content to embed
         let to_embed: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
