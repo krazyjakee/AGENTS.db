@@ -14,17 +14,38 @@ pub struct SearchQuery {
     pub embedding: Vec<f32>,
     pub k: usize,
     pub filters: SearchFilters,
+    /// Optional raw query text for lexical search
+    pub query_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMode {
+    /// Pure semantic search (vector similarity only)
+    Semantic,
+    /// Hybrid search with lexical filtering + semantic ranking
+    Hybrid,
+}
+
+impl Default for SearchMode {
+    fn default() -> Self {
+        Self::Hybrid
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct SearchOptions {
     /// When enabled, search may use a sidecar index (if present and not stale) to accelerate exact search.
     pub use_index: bool,
+    /// Search mode: semantic only or hybrid (lexical + semantic)
+    pub mode: SearchMode,
 }
 
 impl Default for SearchOptions {
     fn default() -> Self {
-        Self { use_index: false }
+        Self {
+            use_index: false,
+            mode: SearchMode::default(),
+        }
     }
 }
 
@@ -84,7 +105,9 @@ pub fn search_layers_with_options(
 
     // Precompute which chunk IDs are selected (local > user > delta > base), accounting for
     // append-only updates within a layer and tombstone retractions.
-    let selection = compute_selection(layers)?;
+    // In hybrid mode with query_text, lexical tier comparison allows better matches from
+    // lower-precedence layers to surface.
+    let selection = compute_selection(layers, query.query_text.as_deref())?;
 
     let kind_filter: Option<HashSet<&str>> = if query.filters.kinds.is_empty() {
         None
@@ -94,7 +117,7 @@ pub fn search_layers_with_options(
 
     let query_norm = l2_norm(&query.embedding);
     let mut tmp = vec![0.0f32; dim];
-    let mut hits: Vec<SearchResult> = Vec::new();
+    let mut hits: Vec<(SearchResult, u32)> = Vec::new(); // (result, priority_tier)
 
     let layers_by_id: HashMap<LayerId, &LayerFile> =
         layers.iter().map(|(id, f)| (*id, f)).collect();
@@ -104,6 +127,8 @@ pub fn search_layers_with_options(
     } else {
         IndexLookup::empty()
     };
+
+    let use_hybrid = options.mode == SearchMode::Hybrid && query.query_text.is_some();
 
     for (chunk_id, selected) in selection.selected.iter() {
         let layer = layers_by_id
@@ -117,11 +142,12 @@ pub fn search_layers_with_options(
             if !kinds.contains(chunk.kind) {
                 continue;
             }
-        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS {
+        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS || chunk.kind.starts_with("meta.") {
             continue;
         }
 
-        let score = if let Some(index) = index_lookup.index_for(selected.layer) {
+        // Compute semantic similarity score
+        let semantic_score = if let Some(index) = index_lookup.index_for(selected.layer) {
             let (row_norm, row_opt) = index.row_f32_and_norm(chunk.embedding_row)?;
             match row_opt {
                 Some(row) => {
@@ -166,26 +192,48 @@ pub fn search_layers_with_options(
             sources,
         };
 
-        hits.push(SearchResult {
-            layer: selected.layer,
-            score,
-            chunk: out_chunk,
-            hidden_layers: selection
-                .hidden_by
-                .get(chunk_id)
-                .cloned()
-                .unwrap_or_default(),
-        });
+        // Compute final score based on mode
+        let (final_score, priority_tier) = if use_hybrid {
+            if let Some(ref query_text) = query.query_text {
+                let lexical_match = compute_lexical_match(query_text, &out_chunk.content);
+                let (tier, score) = compute_hybrid_score(lexical_match, semantic_score);
+                (score, tier)
+            } else {
+                (semantic_score, 6) // Fallback to pure semantic
+            }
+        } else {
+            (semantic_score, 6) // Pure semantic mode
+        };
+
+        hits.push((
+            SearchResult {
+                layer: selected.layer,
+                score: final_score,
+                chunk: out_chunk,
+                hidden_layers: selection
+                    .hidden_by
+                    .get(chunk_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            },
+            priority_tier,
+        ));
     }
 
+    // Sort by priority tier first, then by score within tier
     hits.sort_by(|a, b| {
-        score_for_sort(b.score)
-            .total_cmp(&score_for_sort(a.score))
-            .then_with(|| a.chunk.id.cmp(&b.chunk.id))
-            .then_with(|| a.layer.cmp(&b.layer))
+        a.1.cmp(&b.1) // Priority tier (lower is better)
+            .then_with(|| {
+                score_for_sort(b.0.score)
+                    .total_cmp(&score_for_sort(a.0.score))
+            })
+            .then_with(|| a.0.chunk.id.cmp(&b.0.chunk.id))
+            .then_with(|| a.0.layer.cmp(&b.0.layer))
     });
-    hits.truncate(query.k);
-    Ok(hits)
+
+    // Extract results and truncate
+    let results: Vec<SearchResult> = hits.into_iter().map(|(r, _)| r).take(query.k).collect();
+    Ok(results)
 }
 
 fn validate_schema_compatible(layers: &[(LayerId, LayerFile)]) -> Result<(), Error> {
@@ -216,9 +264,26 @@ struct Selection<'a> {
 struct SelectedChunk<'a> {
     layer: LayerId,
     chunk: agentsdb_format::ChunkView<'a>,
+    lexical_tier: u32,
 }
 
-fn compute_selection(layers: &[(LayerId, LayerFile)]) -> Result<Selection<'_>, Error> {
+/// Get lexical tier for a chunk (lower = better match)
+/// Returns 6 if query_text is None (semantic-only mode)
+fn get_lexical_tier(query_text: Option<&str>, content: &str) -> u32 {
+    match query_text {
+        Some(text) => {
+            let lexical_match = compute_lexical_match(text, content);
+            let (tier, _) = compute_hybrid_score(lexical_match, 0.0);
+            tier
+        }
+        None => 6, // No query text = semantic-only = use layer precedence
+    }
+}
+
+fn compute_selection<'a>(
+    layers: &'a [(LayerId, LayerFile)],
+    query_text: Option<&str>,
+) -> Result<Selection<'a>, Error> {
     let mut selected: HashMap<ChunkId, SelectedChunk<'_>> = HashMap::new();
     let mut hidden_by: HashMap<ChunkId, Vec<LayerId>> = HashMap::new();
     let mut retracted_in_higher: HashSet<ChunkId> = HashSet::new();
@@ -249,19 +314,51 @@ fn compute_selection(layers: &[(LayerId, LayerFile)]) -> Result<Selection<'_>, E
         }
 
         for (id, chunk) in last_by_id {
-            if selected.contains_key(&id) {
-                hidden_by.entry(id).or_default().push(*layer_id);
+            // Read chunk content for lexical tier computation
+            let content = chunk.content.to_string();
+            let new_tier = get_lexical_tier(query_text, &content);
+
+            if let Some(existing) = selected.get(&id) {
+                // Chunk ID already exists in higher-priority layer
+                // Compare lexical tiers (only if not retracted)
+                if retracted_in_higher.contains(&id) && chunk.kind != KIND_TOMBSTONE {
+                    hidden_by.entry(id).or_default().push(*layer_id);
+                    continue;
+                }
+
+                let existing_tier = existing.lexical_tier;
+
+                if new_tier < existing_tier {
+                    // This version has BETTER lexical match - replace it
+                    // Mark the old layer as hidden instead
+                    hidden_by.entry(id).or_default().push(existing.layer);
+                    selected.insert(
+                        id,
+                        SelectedChunk {
+                            layer: *layer_id,
+                            chunk,
+                            lexical_tier: new_tier,
+                        },
+                    );
+                } else {
+                    // Keep existing version (better tier or same tier with higher layer precedence)
+                    hidden_by.entry(id).or_default().push(*layer_id);
+                }
                 continue;
             }
+
             if retracted_in_higher.contains(&id) && chunk.kind != KIND_TOMBSTONE {
                 hidden_by.entry(id).or_default().push(*layer_id);
                 continue;
             }
+
+            // First occurrence - just add it
             selected.insert(
                 id,
                 SelectedChunk {
                     layer: *layer_id,
                     chunk,
+                    lexical_tier: new_tier,
                 },
             );
         }
@@ -316,6 +413,127 @@ fn cosine_similarity_row_norm(query: &[f32], query_norm: f32, row: &[f32], row_n
         dot += a * b;
     }
     dot / (query_norm * row_norm)
+}
+
+/// Extract title from chunk content (first markdown heading or first line)
+fn extract_title(content: &str) -> &str {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return "";
+    }
+
+    // Try to find first markdown heading
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            // Remove markdown heading markers and trim
+            let title = line.trim_start_matches('#').trim();
+            if !title.is_empty() {
+                return title;
+            }
+        } else if !line.is_empty() {
+            // First non-empty, non-heading line
+            return line;
+        }
+    }
+
+    trimmed
+}
+
+/// Lexical match scoring for hybrid search
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LexicalMatch {
+    /// Exact phrase match in title
+    ExactTitle,
+    /// Exact phrase match in body
+    ExactBody,
+    /// All keywords present in title
+    AllKeywordsTitle,
+    /// All keywords present in body
+    AllKeywordsBody,
+    /// Some keywords present
+    PartialMatch,
+    /// No lexical match
+    NoMatch,
+}
+
+/// Compute lexical match score for a chunk
+fn compute_lexical_match(query_text: &str, content: &str) -> LexicalMatch {
+    let query_lower = query_text.to_lowercase();
+    let content_lower = content.to_lowercase();
+    let title = extract_title(content);
+    let title_lower = title.to_lowercase();
+
+    // Check for exact phrase match in title
+    if title_lower.contains(&query_lower) {
+        return LexicalMatch::ExactTitle;
+    }
+
+    // Check for exact phrase match in body
+    if content_lower.contains(&query_lower) {
+        return LexicalMatch::ExactBody;
+    }
+
+    // Extract keywords (split on whitespace and common punctuation)
+    let keywords: Vec<String> = query_lower
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';' || c == ':')
+        .filter(|s| s.len() > 2) // Filter out very short words
+        .map(|s| s.to_string())
+        .collect();
+
+    if keywords.is_empty() {
+        return if content_lower.contains(&query_lower) {
+            LexicalMatch::ExactBody
+        } else {
+            LexicalMatch::NoMatch
+        };
+    }
+
+    // Check if all keywords are in title
+    let all_in_title = keywords.iter().all(|kw| title_lower.contains(kw));
+    if all_in_title {
+        return LexicalMatch::AllKeywordsTitle;
+    }
+
+    // Check if all keywords are in body
+    let all_in_body = keywords.iter().all(|kw| content_lower.contains(kw));
+    if all_in_body {
+        return LexicalMatch::AllKeywordsBody;
+    }
+
+    // Check if some keywords are present
+    let any_match = keywords.iter().any(|kw| content_lower.contains(kw));
+    if any_match {
+        return LexicalMatch::PartialMatch;
+    }
+
+    LexicalMatch::NoMatch
+}
+
+/// Compute hybrid score combining lexical match and semantic similarity
+fn compute_hybrid_score(lexical_match: LexicalMatch, semantic_score: f32) -> (u32, f32) {
+    // Return (priority_tier, final_score)
+    // Lower tier number = higher priority
+    match lexical_match {
+        LexicalMatch::ExactTitle => (1, 1.0), // Highest priority
+        LexicalMatch::ExactBody => (2, 0.98),
+        LexicalMatch::AllKeywordsTitle => {
+            // Boost semantic score for title matches
+            (3, 0.90 + semantic_score.max(0.0).min(1.0) * 0.08)
+        }
+        LexicalMatch::AllKeywordsBody => {
+            // Boost semantic score for body matches
+            (4, 0.80 + semantic_score.max(0.0).min(1.0) * 0.10)
+        }
+        LexicalMatch::PartialMatch => {
+            // Slight boost to semantic score
+            (5, 0.50 + semantic_score.max(0.0).min(1.0) * 0.40)
+        }
+        LexicalMatch::NoMatch => {
+            // Pure semantic fallback
+            (6, semantic_score)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -532,6 +750,7 @@ mod tests {
             embedding: vec![1.0, 0.0],
             k: 10,
             filters: SearchFilters::default(),
+            query_text: None,
         };
         let res = search_layers(&layers, &q).unwrap();
         assert_eq!(res.len(), 2);
@@ -560,6 +779,7 @@ mod tests {
             embedding: vec![1.0, 0.0],
             k: 10,
             filters: SearchFilters::default(),
+            query_text: None,
         };
         let res = search_layers(&layers, &q).unwrap();
 
@@ -602,12 +822,13 @@ mod tests {
             embedding: vec![1.0, 0.0],
             k: 10,
             filters: SearchFilters::default(),
+            query_text: None,
         };
 
         let brute =
-            search_layers_with_options(&layers, &q, SearchOptions { use_index: false }).unwrap();
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: false, mode: SearchMode::Semantic }).unwrap();
         let indexed =
-            search_layers_with_options(&layers, &q, SearchOptions { use_index: true }).unwrap();
+            search_layers_with_options(&layers, &q, SearchOptions { use_index: true, mode: SearchMode::Semantic }).unwrap();
 
         assert_eq!(brute.len(), indexed.len());
         for (a, b) in brute.iter().zip(indexed.iter()) {

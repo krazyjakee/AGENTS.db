@@ -95,10 +95,28 @@ pub(crate) fn cmd_inspect(
             })
             .collect();
 
+        // Extract embedding backend from layer metadata, or fall back to options chunks
+        let embedding_backend = file.layer_metadata_bytes()
+            .and_then(|bytes| agentsdb_embeddings::layer_metadata::LayerMetadataV1::from_json_bytes(bytes).ok())
+            .map(|metadata| metadata.embedding_profile.backend)
+            .or_else(|| {
+                // Fallback: read last options chunk in this layer
+                file.chunks()
+                    .filter_map(|c| c.ok())
+                    .filter(|c| c.kind == "options")
+                    .last()
+                    .and_then(|c| {
+                        serde_json::from_str::<serde_json::Value>(c.content)
+                            .ok()
+                            .and_then(|v| v.get("embedding")?.get("backend")?.as_str().map(|s| s.to_string()))
+                    })
+            });
+
         let embedding = EmbeddingJson {
             row_count: file.embedding_matrix.row_count,
             dim: file.embedding_matrix.dim,
             element_type: format!("{:?}", file.embedding_matrix.element_type),
+            backend: embedding_backend,
             data_offset: file.embedding_matrix.data_offset,
             data_length: file.embedding_matrix.data_length,
             quant_scale: file.embedding_matrix.quant_scale,
@@ -138,11 +156,35 @@ pub(crate) fn cmd_inspect(
             file.string_dictionary.string_count
         );
         println!("ChunkTable: chunk_count={}", file.chunk_count);
-        println!(
-            "EmbeddingMatrix: rows={} dim={} type={:?} data_offset={} data_length={} quant_scale={}",
+
+        // Extract embedding backend from layer metadata, or fall back to options chunks
+        let embedding_backend = file.layer_metadata_bytes()
+            .and_then(|bytes| agentsdb_embeddings::layer_metadata::LayerMetadataV1::from_json_bytes(bytes).ok())
+            .map(|metadata| metadata.embedding_profile.backend)
+            .or_else(|| {
+                // Fallback: read last options chunk in this layer
+                file.chunks()
+                    .filter_map(|c| c.ok())
+                    .filter(|c| c.kind == "options")
+                    .last()
+                    .and_then(|c| {
+                        serde_json::from_str::<serde_json::Value>(c.content)
+                            .ok()
+                            .and_then(|v| v.get("embedding")?.get("backend")?.as_str().map(|s| s.to_string()))
+                    })
+            });
+
+        print!(
+            "EmbeddingMatrix: rows={} dim={} type={:?}",
             file.embedding_matrix.row_count,
             file.embedding_matrix.dim,
-            file.embedding_matrix.element_type,
+            file.embedding_matrix.element_type
+        );
+        if let Some(backend) = embedding_backend {
+            print!(" backend={}", backend);
+        }
+        println!(
+            " data_offset={} data_length={} quant_scale={}",
             file.embedding_matrix.data_offset,
             file.embedding_matrix.data_length,
             file.embedding_matrix.quant_scale

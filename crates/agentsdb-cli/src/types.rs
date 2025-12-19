@@ -2,15 +2,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 /// Represents the JSON output structure for the `validate` command.
-pub(crate) struct ValidateJson<'a> {
+pub(crate) struct ValidateJson {
     pub(crate) ok: bool,
-    pub(crate) path: &'a str,
+    pub(crate) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) warnings: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_dim: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) options_dim: Option<u32>,
 }
 
 #[derive(Serialize)]
-/// Represents the JSON output structure for the `clean` command.
-pub(crate) struct CleanJson<'a> {
+/// Represents the JSON output structure for the `destroy` command.
+pub(crate) struct DestroyJson<'a> {
     pub(crate) root: &'a str,
     pub(crate) dry_run: bool,
     pub(crate) paths: Vec<String>,
@@ -62,6 +69,7 @@ pub(crate) struct EmbeddingJson {
     pub(crate) row_count: u64,
     pub(crate) dim: u32,
     pub(crate) element_type: String,
+    pub(crate) backend: Option<String>,
     pub(crate) data_offset: u64,
     pub(crate) data_length: u64,
     pub(crate) quant_scale: f32,

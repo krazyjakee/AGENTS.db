@@ -7,12 +7,15 @@ pub(crate) fn cmd_compact(
     base: Option<&str>,
     user: Option<&str>,
     out: Option<&str>,
+    remove_tombstones: bool,
+    remove_proposals: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("resolve current directory")?;
 
     if base.is_none() && user.is_none() && out.is_none() {
-        let compacted = compact_all_in_dir(&cwd).context("compact all")?;
+        let compacted = compact_all_in_dir(&cwd, remove_tombstones, remove_proposals)
+            .context("compact all")?;
         if json {
             #[derive(Serialize)]
             struct Out<'a> {
@@ -54,8 +57,10 @@ pub(crate) fn cmd_compact(
     agentsdb_format::ensure_writable_layer_path_allow_user(&out)
         .context("refuse to write compacted output to a non-writable layer path")?;
 
-    let (schema, chunks) = compact_layers(base.as_deref(), user.as_deref()).context("compact")?;
-    agentsdb_format::write_layer_atomic(&out, &schema, &chunks, None)
+    let (schema, mut chunks) =
+        compact_layers(base.as_deref(), user.as_deref(), remove_tombstones, remove_proposals)
+            .context("compact")?;
+    agentsdb_format::write_layer_atomic(&out, &schema, &mut chunks, None)
         .context("write compacted layer")?;
 
     if json {
@@ -84,7 +89,11 @@ pub(crate) fn cmd_compact(
     Ok(())
 }
 
-fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn compact_all_in_dir(
+    dir: &Path,
+    remove_tombstones: bool,
+    remove_proposals: bool,
+) -> anyhow::Result<Vec<PathBuf>> {
     let mut compacted = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let entry = entry.context("read_dir entry")?;
@@ -109,14 +118,58 @@ fn compact_all_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
             continue;
         }
 
-        let Ok(file) = agentsdb_format::LayerFile::open_lenient(&path) else {
-            continue;
+        let file = match agentsdb_format::LayerFile::open_lenient(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "Warning: skipping {} (failed to open: {})",
+                    path.display(),
+                    e
+                );
+                continue;
+            }
         };
 
         let schema = agentsdb_format::schema_of(&file);
-        let chunks = agentsdb_format::read_all_chunks(&file)
+        let all_chunks = agentsdb_format::read_all_chunks(&file)
             .with_context(|| format!("read chunks from {}", path.display()))?;
-        agentsdb_format::write_layer_atomic(&path, &schema, &chunks, None)
+
+        // Deduplicate options chunks and filter them from non-base layers.
+        // Only AGENTS.db (base layer) should contain options documents.
+        let mut options_chunk: Option<agentsdb_format::ChunkInput> = None;
+        let mut chunks = Vec::new();
+
+        for c in all_chunks {
+            // Filter tombstones if requested
+            if remove_tombstones && c.kind == agentsdb_embeddings::config::KIND_TOMBSTONE {
+                continue;
+            }
+
+            // Filter proposal events if requested
+            if remove_proposals && c.kind == "meta.proposal_event" {
+                continue;
+            }
+
+            if c.kind == agentsdb_embeddings::config::KIND_OPTIONS {
+                // Keep only the newest options chunk
+                if let Some(existing) = &options_chunk {
+                    if c.created_at_unix_ms > existing.created_at_unix_ms {
+                        options_chunk = Some(c);
+                    }
+                } else {
+                    options_chunk = Some(c);
+                }
+            } else {
+                chunks.push(c);
+            }
+        }
+
+        // Add the single deduplicated options chunk back (if any)
+        if let Some(opts) = options_chunk {
+            chunks.push(opts);
+        }
+
+        agentsdb_format::write_layer_atomic(&path, &schema, &mut chunks, None)
             .with_context(|| format!("rewrite {}", path.display()))?;
         compacted.push(path);
     }
@@ -141,12 +194,16 @@ fn default_out_path(base: Option<&str>, user: Option<&str>) -> Option<String> {
 fn compact_layers(
     base: Option<&str>,
     user: Option<&str>,
+    remove_tombstones: bool,
+    remove_proposals: bool,
 ) -> anyhow::Result<(
     agentsdb_format::LayerSchema,
     Vec<agentsdb_format::ChunkInput>,
 )> {
     let mut schema: Option<agentsdb_format::LayerSchema> = None;
     let mut by_id: BTreeMap<u32, agentsdb_format::ChunkInput> = BTreeMap::new();
+    // Track options chunks separately to deduplicate them (keep newest)
+    let mut options_chunks: Vec<agentsdb_format::ChunkInput> = Vec::new();
 
     for (layer_name, path) in [("base", base), ("user", user)] {
         let Some(path) = path else { continue };
@@ -173,11 +230,41 @@ fn compact_layers(
         }
 
         for c in agentsdb_format::read_all_chunks(&file)? {
+            // Skip options chunks from non-base layers.
+            // Only AGENTS.db (base layer) should contain options documents.
+            if layer_name != "base" && c.kind == agentsdb_embeddings::config::KIND_OPTIONS {
+                continue;
+            }
+
+            // Filter tombstones if requested
+            if remove_tombstones && c.kind == agentsdb_embeddings::config::KIND_TOMBSTONE {
+                continue;
+            }
+
+            // Filter proposal events if requested
+            if remove_proposals && c.kind == "meta.proposal_event" {
+                continue;
+            }
+
+            // Collect options chunks separately for deduplication
+            if c.kind == agentsdb_embeddings::config::KIND_OPTIONS {
+                options_chunks.push(c);
+                continue;
+            }
+
             // When duplicates exist (either within a file or across layers),
             // always keep the newest entry (last occurrence).
             // This allows compact to fix corrupted files with duplicate IDs.
             by_id.insert(c.id, c);
         }
+    }
+
+    // Deduplicate options chunks: keep only the newest one (last by created_at_unix_ms)
+    if let Some(newest_options) = options_chunks
+        .into_iter()
+        .max_by_key(|c| c.created_at_unix_ms)
+    {
+        by_id.insert(newest_options.id, newest_options);
     }
 
     let schema = schema.context("no schema (no input layers opened)")?;
@@ -258,27 +345,29 @@ mod tests {
         let user_path = dir.join("AGENTS.user.db");
         let out_path = dir.join("AGENTS.compacted.db");
 
+        let mut base_chunks = [
+            chunk(1, "canonical", "base a"),
+            chunk(2, "canonical", "base b"),
+        ];
         agentsdb_format::write_layer_atomic(
             &base_path,
             &schema(),
-            &[
-                chunk(1, "canonical", "base a"),
-                chunk(2, "canonical", "base b"),
-            ],
+            &mut base_chunks,
             None,
         )
         .unwrap();
+        let mut user_chunks = [chunk(100, "note", "user x")];
         agentsdb_format::write_layer_atomic(
             &user_path,
             &schema(),
-            &[chunk(100, "note", "user x")],
+            &mut user_chunks,
             None,
         )
         .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
-        cmd_compact(Some(&base_s), Some(&user_s), None, true).unwrap();
+        cmd_compact(Some(&base_s), Some(&user_s), None, false, false, true).unwrap();
 
         let out_file = agentsdb_format::LayerFile::open(&out_path).unwrap();
         let chunks = agentsdb_format::read_all_chunks(&out_file).unwrap();
@@ -298,24 +387,26 @@ mod tests {
         let base_path = dir.join("AGENTS.db");
         let user_path = dir.join("AGENTS.user.db");
 
+        let mut base_chunks = [chunk(1, "canonical", "old content")];
         agentsdb_format::write_layer_atomic(
             &base_path,
             &schema(),
-            &[chunk(1, "canonical", "old content")],
+            &mut base_chunks,
             None,
         )
         .unwrap();
+        let mut user_chunks = [chunk(1, "canonical", "new content")];
         agentsdb_format::write_layer_atomic(
             &user_path,
             &schema(),
-            &[chunk(1, "canonical", "new content")],
+            &mut user_chunks,
             None,
         )
         .unwrap();
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
-        let (_, chunks) = compact_layers(Some(&base_s), Some(&user_s)).unwrap();
+        let (_, chunks) = compact_layers(Some(&base_s), Some(&user_s), false, false).unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].id, 1);
@@ -330,19 +421,21 @@ mod tests {
         let junk_path = dir.join("junk.db");
         let other_path = dir.join("notes.txt");
 
+        let mut a_chunks = [chunk(1, "canonical", "a")];
         agentsdb_format::write_layer_atomic(
             &a_path,
             &schema(),
-            &[chunk(1, "canonical", "a")],
+            &mut a_chunks,
             None,
         )
         .unwrap();
-        agentsdb_format::write_layer_atomic(&b_path, &schema(), &[chunk(2, "note", "b")], None)
+        let mut b_chunks = [chunk(2, "note", "b")];
+        agentsdb_format::write_layer_atomic(&b_path, &schema(), &mut b_chunks, None)
             .unwrap();
         std::fs::write(&junk_path, b"not an agentsdb layer").unwrap();
         std::fs::write(&other_path, b"ignore").unwrap();
 
-        let compacted = compact_all_in_dir(&dir).unwrap();
+        let compacted = compact_all_in_dir(&dir, false, false).unwrap();
         let rendered: HashSet<String> = compacted
             .into_iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

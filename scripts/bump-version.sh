@@ -79,7 +79,7 @@ else
     exit 1
 fi
 
-cargo build -p agentsdb-cli --features all-embedders
+cargo generate-lockfile
 
 echo ""
 echo -e "${GREEN}✓ Version bumped from ${CURRENT_VERSION} to ${NEW_VERSION}${NC}"

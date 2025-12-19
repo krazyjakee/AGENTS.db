@@ -122,7 +122,7 @@ mod tests {
             element_type: EmbeddingElementType::F32,
             quant_scale: 0.0,
         };
-        let chunks: Vec<ChunkInput> = (0..chunk_count)
+        let mut chunks: Vec<ChunkInput> = (0..chunk_count)
             .map(|i| ChunkInput {
                 id: i + 1,
                 kind: "canonical".to_string(),
@@ -134,7 +134,7 @@ mod tests {
                 sources: Vec::new(),
             })
             .collect();
-        agentsdb_format::write_layer_atomic(path, &schema, &chunks, None).expect("write layer");
+        agentsdb_format::write_layer_atomic(path, &schema, &mut chunks, None).expect("write layer");
     }
 
     #[test]

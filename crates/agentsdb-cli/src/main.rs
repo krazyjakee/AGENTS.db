@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod commands;
+mod embedding_helpers;
 mod types;
 mod util;
 

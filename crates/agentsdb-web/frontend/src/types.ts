@@ -10,6 +10,7 @@ export interface LayerMeta {
   file_length_bytes: number;
   embedding_dim: number;
   embedding_element_type: string;
+  embedding_backend: string | null;
   relationship_count: number | null;
   kinds: Record<string, number>;
   removed_count: number;
@@ -27,6 +28,7 @@ export interface ChunkSummary {
   source_count: number;
   removed: boolean;
   content_preview: string;
+  layer?: string; // Optional: set when chunk comes from search results across layers
 }
 
 export interface ChunkFull {

@@ -39,6 +39,10 @@
   - `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`
 - PRs should include: a short rationale, key commands run (e.g., `cargo test`), and any relevant CLI examples (e.g., `agentsdb compile`, `agentsdb search`).
 
+## Building
+
+Use `./scripts/install-local.sh` to build
+
 ## Agent-Specific Notes
 
 This repository includes a compiled documentation database/knowledgebase at `AGENTS.db`.

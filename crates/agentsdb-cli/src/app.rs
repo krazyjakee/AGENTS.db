@@ -96,6 +96,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             k,
             kinds,
             use_index,
+            mode,
         } => crate::commands::search::cmd_search(
             layerset(layers),
             query,
@@ -104,6 +105,7 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             k,
             kinds,
             use_index,
+            mode,
             json,
         ),
         Command::Index {
@@ -176,13 +178,26 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             yes,
             json,
         ),
-        Command::Compact { base, user, out } => crate::commands::compact::cmd_compact(
+        Command::Compact {
+            base,
+            user,
+            out,
+            remove_tombstones,
+            remove_proposals,
+        } => crate::commands::compact::cmd_compact(
             base.as_deref(),
             user.as_deref(),
             out.as_deref(),
+            remove_tombstones,
+            remove_proposals,
             json,
         ),
-        Command::Clean { root, dry_run } => crate::commands::clean::cmd_clean(&root, dry_run, json),
+        Command::Reembed {
+            dir,
+            layers,
+            allow_base,
+        } => crate::commands::reembed::cmd_reembed(&dir, &layers, allow_base, json),
+        Command::Destroy { root, dry_run } => crate::commands::destroy::cmd_destroy(&root, dry_run, json),
         Command::Web { root, bind } => {
             if json {
                 anyhow::bail!("--json is not supported for web");
@@ -225,8 +240,9 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
                 cache_dir.as_deref(),
                 json,
             ),
-            OptionsCommand::Wizard { scope } => {
-                crate::commands::options::cmd_options_wizard(&dir, &scope, json)
+            OptionsCommand::Wizard { scope: _ } => {
+                // Wizard always writes to base layer (AGENTS.db) only
+                crate::commands::options::cmd_options_wizard(&dir, json)
             }
             OptionsCommand::Allowlist { cmd } => match cmd {
                 AllowlistCommand::List { layers } => {
@@ -321,10 +337,65 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 fn layerset(layers: LayerArgs) -> agentsdb_query::LayerSet {
+    // If all layers are None, auto-discover standard layer files in the current directory
+    if layers.base.is_none()
+        && layers.user.is_none()
+        && layers.delta.is_none()
+        && layers.local.is_none()
+    {
+        discover_standard_layers()
+    } else {
+        // Auto-discover AGENTS.db if base is not explicitly provided
+        // This ensures embedding options are always available from the base layer
+        let base = layers.base.or_else(|| {
+            let path = "AGENTS.db";
+            if std::path::Path::new(path).exists() {
+                Some(path.to_string())
+            } else {
+                None
+            }
+        });
+
+        agentsdb_query::LayerSet {
+            base,
+            user: layers.user,
+            delta: layers.delta,
+            local: layers.local,
+        }
+    }
+}
+
+fn discover_standard_layers() -> agentsdb_query::LayerSet {
+    // Standard layer filenames in the current directory
+    let standard_paths = [
+        ("AGENTS.db", "base"),
+        ("AGENTS.user.db", "user"),
+        ("AGENTS.delta.db", "delta"),
+        ("AGENTS.local.db", "local"),
+    ];
+
+    let mut base = None;
+    let mut user = None;
+    let mut delta = None;
+    let mut local = None;
+
+    for (filename, layer_type) in standard_paths {
+        if std::path::Path::new(filename).exists() {
+            let path_str = filename.to_string();
+            match layer_type {
+                "base" => base = Some(path_str),
+                "user" => user = Some(path_str),
+                "delta" => delta = Some(path_str),
+                "local" => local = Some(path_str),
+                _ => {}
+            }
+        }
+    }
+
     agentsdb_query::LayerSet {
-        base: layers.base,
-        user: layers.user,
-        delta: layers.delta,
-        local: layers.local,
+        base,
+        user,
+        delta,
+        local,
     }
 }

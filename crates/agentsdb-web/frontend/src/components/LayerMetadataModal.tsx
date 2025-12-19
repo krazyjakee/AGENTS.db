@@ -43,7 +43,9 @@ export function LayerMetadataModal({ layerMeta, onClose }: LayerMetadataModalPro
           <div class="stat bg-base-200 rounded-lg p-4">
             <div class="stat-title text-xs">Embedding</div>
             <div class="stat-value text-lg mono">dim={layerMeta.embedding_dim}</div>
-            <div class="stat-desc">{layerMeta.embedding_element_type}</div>
+            <div class="stat-desc">
+              {layerMeta.embedding_element_type} • backend: {layerMeta.embedding_backend || 'unknown'}
+            </div>
           </div>
 
           <div class="stat bg-base-200 rounded-lg p-4">

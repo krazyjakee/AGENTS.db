@@ -383,7 +383,7 @@ pub fn roll_up_embedding_options(
     layers_high_to_low: &[Option<&agentsdb_format::LayerFile>],
 ) -> anyhow::Result<ResolvedEmbeddingOptions> {
     let mut out = ResolvedEmbeddingOptions {
-        backend: "hash".to_string(),
+        backend: "hash".into(),
         model: None,
         revision: None,
         model_path: None,
@@ -520,6 +520,29 @@ pub fn roll_up_embedding_options_from_paths(
     ])
 }
 
+/// Get immutable embedding options from base layer only.
+///
+/// This ensures all operations use the same embedding configuration from AGENTS.db,
+/// preventing inconsistencies when different operations would otherwise use different
+/// embedding settings from higher-priority layers.
+///
+/// # Arguments
+/// * `dir` - Directory containing the AGENTS.db file
+///
+/// # Returns
+/// Resolved embedding options read only from AGENTS.db (base layer)
+pub fn get_immutable_embedding_options(
+    dir: &std::path::Path,
+) -> anyhow::Result<ResolvedEmbeddingOptions> {
+    let standard = standard_layer_paths_for_dir(dir);
+    roll_up_embedding_options_from_paths(
+        None,  // local - not read
+        None,  // user - not read
+        None,  // delta - not read
+        Some(standard.base.as_path()),  // base only
+    )
+}
+
 fn open_if_exists(
     path: Option<&std::path::Path>,
 ) -> anyhow::Result<Option<agentsdb_format::LayerFile>> {
@@ -649,7 +672,8 @@ mod tests {
             embedding: vec![0.0; schema.dim as usize],
             sources: Vec::new(),
         };
-        agentsdb_format::write_layer_atomic(&base, &schema, &[base_chunk], None).unwrap();
+        let mut chunks = [base_chunk];
+        agentsdb_format::write_layer_atomic(&base, &schema, &mut chunks, None).unwrap();
 
         let local_record_remove = OptionsRecord {
             embedding: None,
@@ -676,31 +700,32 @@ mod tests {
                 }],
             }),
         };
+        let mut chunks = [
+            agentsdb_format::ChunkInput {
+                id: 1,
+                kind: KIND_OPTIONS.to_string(),
+                content: serde_json::to_string(&local_record_remove).unwrap(),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: 0,
+                embedding: vec![0.0; schema.dim as usize],
+                sources: Vec::new(),
+            },
+            agentsdb_format::ChunkInput {
+                id: 2,
+                kind: KIND_OPTIONS.to_string(),
+                content: serde_json::to_string(&local_record_add).unwrap(),
+                author: "human".to_string(),
+                confidence: 1.0,
+                created_at_unix_ms: 0,
+                embedding: vec![0.0; schema.dim as usize],
+                sources: Vec::new(),
+            },
+        ];
         agentsdb_format::write_layer_atomic(
             &local,
             &schema,
-            &[
-                agentsdb_format::ChunkInput {
-                    id: 1,
-                    kind: KIND_OPTIONS.to_string(),
-                    content: serde_json::to_string(&local_record_remove).unwrap(),
-                    author: "human".to_string(),
-                    confidence: 1.0,
-                    created_at_unix_ms: 0,
-                    embedding: vec![0.0; schema.dim as usize],
-                    sources: Vec::new(),
-                },
-                agentsdb_format::ChunkInput {
-                    id: 2,
-                    kind: KIND_OPTIONS.to_string(),
-                    content: serde_json::to_string(&local_record_add).unwrap(),
-                    author: "human".to_string(),
-                    confidence: 1.0,
-                    created_at_unix_ms: 0,
-                    embedding: vec![0.0; schema.dim as usize],
-                    sources: Vec::new(),
-                },
-            ],
+            &mut chunks,
             None,
         )
         .unwrap();

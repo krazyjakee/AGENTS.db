@@ -1,7 +1,6 @@
 use anyhow::Context;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::util::now_unix_ms;
@@ -18,7 +17,7 @@ pub struct PromoteOutcome {
 /// * `from_path` - Source layer path
 /// * `to_path` - Destination layer path
 /// * `ids` - Chunk IDs to promote
-/// * `skip_existing` - If true, skip chunks that already exist in destination
+/// * `_skip_existing` - (Deprecated) No longer used; promoted chunks always receive new auto-assigned IDs
 /// * `tombstone_source` - If true, add tombstone markers in source layer after promotion
 ///
 /// # Returns
@@ -27,7 +26,7 @@ pub fn promote_chunks(
     from_path: &str,
     to_path: &str,
     ids: &[u32],
-    skip_existing: bool,
+    _skip_existing: bool,
     tombstone_source: bool,
 ) -> anyhow::Result<PromoteOutcome> {
     if ids.is_empty() {
@@ -46,7 +45,6 @@ pub fn promote_chunks(
         from_chunks.into_iter().map(|c| (c.id, c)).collect();
 
     let to_p = Path::new(to_path);
-    let mut to_existing_ids: BTreeSet<u32> = BTreeSet::new();
     if to_p.exists() {
         let to_file =
             agentsdb_format::LayerFile::open(to_path).with_context(|| format!("open {to_path}"))?;
@@ -57,26 +55,12 @@ pub fn promote_chunks(
         {
             anyhow::bail!("schema mismatch between {from_path} and {to_path}");
         }
-        to_existing_ids = agentsdb_format::read_all_chunks(&to_file)?
-            .into_iter()
-            .map(|c| c.id)
-            .collect();
     }
 
-    let mut filtered = Vec::new();
-    let mut skipped = Vec::new();
-    for id in ids {
-        if to_existing_ids.contains(id) {
-            if skip_existing {
-                skipped.push(*id);
-                continue;
-            }
-            anyhow::bail!(
-                "destination already contains id {id} (use skip_existing=true to skip duplicates)"
-            );
-        }
-        filtered.push(*id);
-    }
+    // Note: We no longer check for ID collisions because promoted chunks
+    // will receive auto-assigned IDs in the target layer (id=0 triggers auto-assignment)
+    let filtered: Vec<u32> = ids.to_vec();
+    let skipped = Vec::new();
 
     if filtered.is_empty() {
         return Ok(PromoteOutcome {
@@ -91,23 +75,24 @@ pub fn promote_chunks(
             anyhow::bail!("id {id} not found in {from_path}");
         };
         let mut c = c.clone();
+        c.id = 0; // Force auto-assignment of new ID in target layer
         if c.author != "human" {
             c.author = "human".to_string();
         }
         promote.push(c);
     }
 
-    if to_p.exists() {
-        agentsdb_format::append_layer_atomic(to_path, &mut promote, None).context("append")?;
+    let assigned_ids = if to_p.exists() {
+        agentsdb_format::append_layer_atomic(to_path, &mut promote, None).context("append")?
     } else {
         agentsdb_format::write_layer_atomic(
             to_path,
             &from_schema,
-            &promote,
+            &mut promote,
             from_metadata.as_deref(),
         )
-        .context("write")?;
-    }
+        .context("write")?
+    };
 
     // Tombstone promoted chunks in source layer if requested
     if tombstone_source && !filtered.is_empty() {
@@ -137,7 +122,7 @@ pub fn promote_chunks(
     }
 
     Ok(PromoteOutcome {
-        promoted: filtered,
+        promoted: assigned_ids,
         skipped,
     })
 }

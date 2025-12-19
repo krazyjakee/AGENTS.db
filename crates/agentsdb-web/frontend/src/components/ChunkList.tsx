@@ -75,7 +75,7 @@ export function ChunkList({
       setSearchError(null);
       const results = await api.searchChunks({
         query: searchQuery,
-        layers: [selectedLayer],
+        layers: [], // Empty array triggers search across all layers
         k: 50,
         kinds: kindFilter ? [kindFilter] : undefined,
       });
@@ -114,6 +114,7 @@ export function ChunkList({
       source_count: r.sources.length,
       removed: false,
       content_preview: r.content_preview,
+      layer: r.layer, // Preserve layer info from search results
     }));
   }, [searchResults]);
 

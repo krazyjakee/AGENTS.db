@@ -68,18 +68,32 @@ pub(crate) fn cmd_import(
 
         if json {
             println!("{}", serde_json::to_string_pretty(&out_struct)?);
-        } else if dry_run {
-            println!(
-                "Dry-run: would import {} chunks to {} (skipped={})",
-                outcome.imported, target_path, outcome.skipped
-            );
-        } else if outcome.imported == 0 {
-            println!("No chunks imported (skipped={})", outcome.skipped);
         } else {
-            println!(
-                "Imported {} chunks to {} (skipped={})",
-                outcome.imported, target_path, outcome.skipped
-            );
+            // Display re-embedding info if applicable
+            if outcome.reembedded_count > 0 {
+                if let (Some(from), Some(to)) = (&outcome.reembedded_from, &outcome.reembedded_to) {
+                    if from != to {
+                        println!(
+                            "Re-embedded {} chunks from {} backend to {} backend",
+                            outcome.reembedded_count, from, to
+                        );
+                    }
+                }
+            }
+
+            if dry_run {
+                println!(
+                    "Dry-run: would import {} chunks to {} (skipped={})",
+                    outcome.imported, target_path, outcome.skipped
+                );
+            } else if outcome.imported == 0 {
+                println!("No chunks imported (skipped={})", outcome.skipped);
+            } else {
+                println!(
+                    "Imported {} chunks to {} (skipped={})",
+                    outcome.imported, target_path, outcome.skipped
+                );
+            }
         }
 
         return Ok(());
@@ -143,22 +157,38 @@ pub(crate) fn cmd_import(
             layers,
         };
         println!("{}", serde_json::to_string_pretty(&out_struct)?);
-    } else if dry_run {
-        println!(
-            "Dry-run: would import {} chunks across {} layers (skipped={})",
-            total_imported,
-            results.len(),
-            total_skipped
-        );
-    } else if total_imported == 0 {
-        println!("No chunks imported (skipped={})", total_skipped);
     } else {
-        println!(
-            "Imported {} chunks across {} layers (skipped={})",
-            total_imported,
-            results.len(),
-            total_skipped
-        );
+        // Display re-embedding info if applicable
+        for (_, outcome) in &results {
+            if outcome.reembedded_count > 0 {
+                if let (Some(from), Some(to)) = (&outcome.reembedded_from, &outcome.reembedded_to) {
+                    if from != to {
+                        println!(
+                            "Re-embedded {} chunks from {} backend to {} backend",
+                            outcome.reembedded_count, from, to
+                        );
+                    }
+                }
+            }
+        }
+
+        if dry_run {
+            println!(
+                "Dry-run: would import {} chunks across {} layers (skipped={})",
+                total_imported,
+                results.len(),
+                total_skipped
+            );
+        } else if total_imported == 0 {
+            println!("No chunks imported (skipped={})", total_skipped);
+        } else {
+            println!(
+                "Imported {} chunks across {} layers (skipped={})",
+                total_imported,
+                results.len(),
+                total_skipped
+            );
+        }
     }
 
     Ok(())

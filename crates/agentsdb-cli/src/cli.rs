@@ -179,6 +179,10 @@ pub(crate) enum Command {
         /// Use a rebuildable sidecar index (if present) to accelerate exact search.
         #[arg(long)]
         use_index: bool,
+
+        /// Search mode: hybrid (lexical + semantic) or semantic-only.
+        #[arg(long, default_value = "hybrid")]
+        mode: String,
     },
     /// Build a rebuildable sidecar index for one or more layers.
     Index {
@@ -291,9 +295,27 @@ pub(crate) enum Command {
         /// Output path for the compacted layer.
         #[arg(long)]
         out: Option<String>,
+        /// Remove tombstone chunks during compaction.
+        #[arg(long)]
+        remove_tombstones: bool,
+        /// Remove proposal event chunks during compaction.
+        #[arg(long)]
+        remove_proposals: bool,
+    },
+    /// Re-embed content from all layers using the embedding options configured in AGENTS.db.
+    Reembed {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Comma-separated logical layers to re-embed: `base,user,delta,local`.
+        #[arg(long, default_value = "user,delta,local")]
+        layers: String,
+        /// Allow re-embedding the base layer (AGENTS.db). Required to include `base` in --layers.
+        #[arg(long)]
+        allow_base: bool,
     },
     /// Delete AGENTS*.db files under a root directory.
-    Clean {
+    Destroy {
         /// Root directory to scan.
         #[arg(long, default_value = ".")]
         root: String,
@@ -347,8 +369,8 @@ pub(crate) enum OptionsCommand {
     },
     /// Append a new options record to a writable standard layer file.
     Set {
-        /// Destination scope to write to: `local` | `user` | `delta`.
-        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        /// Destination scope to write to: `base` (required for consistency).
+        #[arg(long, default_value = "base", value_parser = ["base"])]
         scope: String,
         /// Embedder backend (e.g. `hash`, `candle`, `ort`, `openai`, `voyage`, `cohere`).
         #[arg(long)]
@@ -383,8 +405,8 @@ pub(crate) enum OptionsCommand {
     },
     /// Interactive prompt for configuring embedding options.
     Wizard {
-        /// Destination scope to write to: `local` | `user` | `delta`.
-        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        /// Destination scope to write to: `base` (required for consistency).
+        #[arg(long, default_value = "base", value_parser = ["base"])]
         scope: String,
     },
     /// Manage a known-good SHA-256 allowlist for local models (per model+revision).
@@ -404,8 +426,8 @@ pub(crate) enum AllowlistCommand {
     },
     /// Add or update an allowlist entry.
     Add {
-        /// Destination scope to write to: `local` | `user` | `delta`.
-        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        /// Destination scope to write to: `base` (required for consistency).
+        #[arg(long, default_value = "base", value_parser = ["base"])]
         scope: String,
         /// Model identifier (e.g. `all-minilm-l6-v2`).
         #[arg(long)]
@@ -419,8 +441,8 @@ pub(crate) enum AllowlistCommand {
     },
     /// Remove an allowlist entry.
     Remove {
-        /// Destination scope to write to: `local` | `user` | `delta`.
-        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        /// Destination scope to write to: `base` (required for consistency).
+        #[arg(long, default_value = "base", value_parser = ["base"])]
         scope: String,
         /// Model identifier (e.g. `all-minilm-l6-v2`).
         #[arg(long)]
@@ -431,8 +453,8 @@ pub(crate) enum AllowlistCommand {
     },
     /// Clear the allowlist in the target layer (higher layers still apply).
     Clear {
-        /// Destination scope to write to: `local` | `user` | `delta`.
-        #[arg(long, default_value = "local", value_parser = ["local", "user", "delta"])]
+        /// Destination scope to write to: `base` (required for consistency).
+        #[arg(long, default_value = "base", value_parser = ["base"])]
         scope: String,
     },
 }
@@ -530,14 +552,14 @@ mod tests {
     }
 
     #[test]
-    fn clean_parses_defaults() {
-        let cli = Cli::try_parse_from(["agentsdb", "clean"]).expect("parse should succeed");
+    fn destroy_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "destroy"]).expect("parse should succeed");
         match cli.cmd {
-            Command::Clean { root, dry_run } => {
+            Command::Destroy { root, dry_run } => {
                 assert_eq!(root, ".");
                 assert!(!dry_run);
             }
-            _ => panic!("expected clean command"),
+            _ => panic!("expected destroy command"),
         }
     }
 
@@ -612,7 +634,7 @@ mod tests {
             Command::Options { dir, cmd } => {
                 assert_eq!(dir, ".");
                 match cmd {
-                    OptionsCommand::Wizard { scope } => assert_eq!(scope, "local"),
+                    OptionsCommand::Wizard { scope } => assert_eq!(scope, "base"),
                     _ => panic!("expected wizard subcommand"),
                 }
             }

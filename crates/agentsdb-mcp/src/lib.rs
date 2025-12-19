@@ -1,6 +1,6 @@
 use agentsdb_core::types::{LayerId, SearchFilters};
 use agentsdb_embeddings::config::{
-    roll_up_embedding_options, roll_up_embedding_options_from_paths,
+    get_immutable_embedding_options, roll_up_embedding_options,
 };
 use agentsdb_embeddings::layer_metadata::ensure_layer_metadata_compatible_with_embedder;
 use agentsdb_embeddings::layer_metadata::LayerMetadataV1;
@@ -577,14 +577,18 @@ fn handle_search(config: &ServerConfig, params: SearchParams) -> anyhow::Result<
             .unwrap_or_else(|| vec![0.0; dim]),
     };
     let query = SearchQuery {
-        embedding: embedding.clone(),
+        embedding,
         k,
         filters,
+        query_text: Some(params.query),
     };
     let results = agentsdb_query::search_layers_with_options(
         &opened,
         &query,
-        agentsdb_query::SearchOptions { use_index: true },
+        agentsdb_query::SearchOptions {
+            use_index: true,
+            mode: agentsdb_query::SearchMode::Hybrid,
+        },
     )
     .context("search")?;
     Ok(serde_json::to_value(results)?)
@@ -645,13 +649,11 @@ fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Va
     let assigned = if std::path::Path::new(path).exists() {
         let file = agentsdb_format::LayerFile::open(path).context("open layer")?;
         let dim = file.embedding_dim();
-        let options = roll_up_embedding_options_from_paths(
-            config.local.as_deref().map(std::path::Path::new),
-            config.user.as_deref().map(std::path::Path::new),
-            config.delta.as_deref().map(std::path::Path::new),
-            config.base.as_deref().map(std::path::Path::new),
-        )
-        .context("roll up options")?;
+        let dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let options = get_immutable_embedding_options(dir)
+            .context("get immutable embedding options")?;
         if let Some(cfg_dim) = options.dim {
             if cfg_dim != dim {
                 anyhow::bail!(
@@ -697,13 +699,11 @@ fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Va
         chunk.id = 1;
         let schema = infer_schema_from_config(config).context("infer schema")?;
         let dim = schema.dim as usize;
-        let options = roll_up_embedding_options_from_paths(
-            config.local.as_deref().map(std::path::Path::new),
-            config.user.as_deref().map(std::path::Path::new),
-            config.delta.as_deref().map(std::path::Path::new),
-            config.base.as_deref().map(std::path::Path::new),
-        )
-        .context("roll up options")?;
+        let dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let options = get_immutable_embedding_options(dir)
+            .context("get immutable embedding options")?;
         if let Some(cfg_dim) = options.dim {
             if cfg_dim != dim {
                 anyhow::bail!(
@@ -725,7 +725,8 @@ fn handle_write(config: &ServerConfig, params: WriteParams) -> anyhow::Result<Va
         let layer_metadata_json = layer_metadata
             .to_json_bytes()
             .context("serialize layer metadata")?;
-        agentsdb_format::write_layer_atomic(path, &schema, &[chunk], Some(&layer_metadata_json))
+        let mut chunks = [chunk];
+        agentsdb_format::write_layer_atomic(path, &schema, &mut chunks, Some(&layer_metadata_json))
             .context("create layer")?;
         1
     };
