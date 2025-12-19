@@ -295,6 +295,12 @@ pub(crate) enum Command {
         /// Output path for the compacted layer.
         #[arg(long)]
         out: Option<String>,
+        /// Remove tombstone chunks during compaction.
+        #[arg(long)]
+        remove_tombstones: bool,
+        /// Remove proposal event chunks during compaction.
+        #[arg(long)]
+        remove_proposals: bool,
     },
     /// Re-embed content from all layers using the embedding options configured in AGENTS.db.
     Reembed {
@@ -309,7 +315,7 @@ pub(crate) enum Command {
         allow_base: bool,
     },
     /// Delete AGENTS*.db files under a root directory.
-    Clean {
+    Destroy {
         /// Root directory to scan.
         #[arg(long, default_value = ".")]
         root: String,
@@ -546,14 +552,14 @@ mod tests {
     }
 
     #[test]
-    fn clean_parses_defaults() {
-        let cli = Cli::try_parse_from(["agentsdb", "clean"]).expect("parse should succeed");
+    fn destroy_parses_defaults() {
+        let cli = Cli::try_parse_from(["agentsdb", "destroy"]).expect("parse should succeed");
         match cli.cmd {
-            Command::Clean { root, dry_run } => {
+            Command::Destroy { root, dry_run } => {
                 assert_eq!(root, ".");
                 assert!(!dry_run);
             }
-            _ => panic!("expected clean command"),
+            _ => panic!("expected destroy command"),
         }
     }
 

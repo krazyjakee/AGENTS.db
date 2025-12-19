@@ -922,8 +922,8 @@ fn compact_json_writes_expected_chunk_count() {
 }
 
 #[test]
-fn clean_json_dry_run_and_delete() {
-    let dir = TempDir::new("agentsdb_e2e_clean_json");
+fn destroy_json_dry_run_and_delete() {
+    let dir = TempDir::new("agentsdb_e2e_destroy_json");
     std::fs::create_dir_all(dir.path().join("nested")).expect("create nested");
 
     std::fs::write(dir.path().join("AGENTS.db"), b"x").expect("write AGENTS.db");
@@ -932,7 +932,7 @@ fn clean_json_dry_run_and_delete() {
         .expect("write AGENTS.local.db");
     std::fs::write(dir.path().join("nested").join("AGENTS.db.sig"), b"x").expect("write sig");
 
-    let dry = run_ok_json(dir.path(), &["--json", "clean", "--root", ".", "--dry-run"]);
+    let dry = run_ok_json(dir.path(), &["--json", "destroy", "--root", ".", "--dry-run"]);
     let paths = dry["paths"].as_array().unwrap();
     assert!(
         paths.iter().any(|p| p.as_str() == Some("AGENTS.db")),
@@ -950,7 +950,7 @@ fn clean_json_dry_run_and_delete() {
     );
     assert!(dir.path().join("AGENTS.db").exists());
 
-    run_ok(dir.path(), &["clean", "--root", "."]);
+    run_ok(dir.path(), &["destroy", "--root", "."]);
     assert!(!dir.path().join("AGENTS.db").exists());
     assert!(!dir.path().join("AGENTS.base.db").exists());
     assert!(!dir.path().join("nested").join("AGENTS.local.db").exists());

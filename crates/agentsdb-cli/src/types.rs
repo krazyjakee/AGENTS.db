@@ -16,8 +16,8 @@ pub(crate) struct ValidateJson {
 }
 
 #[derive(Serialize)]
-/// Represents the JSON output structure for the `clean` command.
-pub(crate) struct CleanJson<'a> {
+/// Represents the JSON output structure for the `destroy` command.
+pub(crate) struct DestroyJson<'a> {
     pub(crate) root: &'a str,
     pub(crate) dry_run: bool,
     pub(crate) paths: Vec<String>,

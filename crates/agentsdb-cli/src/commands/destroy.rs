@@ -1,8 +1,8 @@
-use crate::types::CleanJson;
+use crate::types::DestroyJson;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn cmd_clean(root: &str, dry_run: bool, json: bool) -> anyhow::Result<()> {
+pub(crate) fn cmd_destroy(root: &str, dry_run: bool, json: bool) -> anyhow::Result<()> {
     let root_path = Path::new(root);
     let mut matches = Vec::new();
     visit_dir(root_path, root_path, &mut matches)?;
@@ -22,7 +22,7 @@ pub(crate) fn cmd_clean(root: &str, dry_run: bool, json: bool) -> anyhow::Result
                     .with_context(|| format!("remove file {}", abs.display()))?;
             }
         }
-        let out = CleanJson {
+        let out = DestroyJson {
             root,
             dry_run,
             paths: rendered,
@@ -95,7 +95,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clean_removes_agents_db_files_recursively() {
+    fn destroy_removes_agents_db_files_recursively() {
         let root = crate::util::make_temp_dir();
         std::fs::create_dir_all(root.join("nested")).expect("create nested");
 
@@ -106,7 +106,7 @@ mod tests {
         std::fs::write(root.join("nested").join("AGENTS.db.sig"), "x").expect("write sig");
         std::fs::write(root.join("nested").join("notes.txt"), "x").expect("write notes");
 
-        cmd_clean(root.to_str().unwrap(), false, false).expect("clean should succeed");
+        cmd_destroy(root.to_str().unwrap(), false, false).expect("destroy should succeed");
 
         assert!(!root.join("AGENTS.db").exists());
         assert!(!root.join("AGENTS.base.db").exists());
@@ -118,11 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn clean_dry_run_does_not_delete() {
+    fn destroy_dry_run_does_not_delete() {
         let root = crate::util::make_temp_dir();
         std::fs::write(root.join("AGENTS.db"), "x").expect("write AGENTS.db");
 
-        cmd_clean(root.to_str().unwrap(), true, false).expect("dry-run should succeed");
+        cmd_destroy(root.to_str().unwrap(), true, false).expect("dry-run should succeed");
         assert!(root.join("AGENTS.db").exists());
 
         std::fs::remove_dir_all(&root).expect("cleanup");
