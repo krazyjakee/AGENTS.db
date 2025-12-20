@@ -138,7 +138,7 @@ export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: Ch
           </div>
         </div>
 
-        <div class="py-4 overflow-auto max-h-[50vh] bg-base-200 rounded-lg p-4">
+        <div class="py-4 overflow-auto bg-base-200 rounded-lg p-4">
           {showRaw ? (
             <pre class="whitespace-pre-wrap font-mono text-sm">
               {chunk.content}
