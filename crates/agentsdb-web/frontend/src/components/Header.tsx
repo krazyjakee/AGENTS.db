@@ -3,7 +3,6 @@ import { api } from '../api';
 import type { ListedLayer } from '../types';
 
 interface HeaderProps {
-  onRefresh: () => void;
   layers: ListedLayer[];
   selectedLayer: string;
   onLayerChange: (path: string) => void;
@@ -12,7 +11,6 @@ interface HeaderProps {
 }
 
 export function Header({
-  onRefresh,
   layers,
   selectedLayer,
   onLayerChange,
@@ -170,25 +168,6 @@ export function Header({
               <path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
             </svg>
           )}
-        </button>
-        <button
-          onClick={onRefresh}
-          class="btn btn-ghost btn-sm btn-circle"
-          title="Refresh layer list"
-          aria-label="Refresh"
-        >
-          <svg
-            class="h-5 w-5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-            <path d="M21 3v6h-6" />
-          </svg>
         </button>
       </div>
     </header>

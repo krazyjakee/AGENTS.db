@@ -300,7 +300,6 @@ export function App() {
   return (
     <div class="min-h-screen flex flex-col">
       <Header
-        onRefresh={refreshLayers}
         layers={layers}
         selectedLayer={selectedLayer}
         onLayerChange={setSelectedLayer}
