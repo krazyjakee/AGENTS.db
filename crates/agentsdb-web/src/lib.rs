@@ -309,7 +309,13 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                 serde_json::from_slice(&req.body).context("parse JSON body for add")?;
             let (assigned, path) = {
                 let mut st = state.lock().expect("poisoned mutex");
-                let abs_path = resolve_layer_path(&st.root, &input.path)?;
+                // Derive the correct layer path based on scope, not the user-selected layer
+                let layer_filename = match input.scope.as_str() {
+                    "local" => "AGENTS.local.db",
+                    "delta" => "AGENTS.delta.db",
+                    _ => anyhow::bail!("scope must be 'local' or 'delta'"),
+                };
+                let abs_path = resolve_layer_path(&st.root, layer_filename)?;
                 let assigned = append_chunk(
                     &abs_path,
                     &input.scope,
@@ -340,8 +346,8 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     .context("append tombstone for old version")?;
                 }
 
-                st.cache.remove(&input.path);
-                (assigned, input.path)
+                st.cache.remove(layer_filename);
+                (assigned, layer_filename.to_string())
             };
 
             #[derive(Serialize)]
@@ -361,10 +367,14 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
         ("POST", "/api/layer/remove") => {
             let input: RemoveInput =
                 serde_json::from_slice(&req.body).context("parse JSON body for remove")?;
-            let path = input.path.clone();
+            let layer_filename = match input.scope.as_str() {
+                "local" => "AGENTS.local.db",
+                "delta" => "AGENTS.delta.db",
+                _ => anyhow::bail!("scope must be 'local' or 'delta'"),
+            };
             {
                 let mut st = state.lock().expect("poisoned mutex");
-                let abs_path = resolve_layer_path(&st.root, &input.path)?;
+                let abs_path = resolve_layer_path(&st.root, layer_filename)?;
                 let _ = append_chunk(
                     &abs_path,
                     &input.scope,
@@ -376,7 +386,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     &Vec::new(),
                     &[input.id],
                 )?;
-                st.cache.remove(&input.path);
+                st.cache.remove(layer_filename);
             }
 
             #[derive(Serialize)]
@@ -387,7 +397,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             }
             let out = Out {
                 ok: true,
-                path,
+                path: layer_filename.to_string(),
                 id: input.id,
             };
             let body = serde_json::to_vec_pretty(&out)?;
@@ -713,7 +723,6 @@ struct SearchResultJson {
 
 #[derive(Debug, Deserialize)]
 struct AddInput {
-    path: String,
     scope: String, // local|delta
     #[serde(default)]
     id: Option<u32>,
@@ -732,7 +741,6 @@ struct AddInput {
 
 #[derive(Debug, Deserialize)]
 struct RemoveInput {
-    path: String,
     scope: String, // local|delta
     id: u32,
 }
@@ -2158,6 +2166,68 @@ mod tests {
         assert!(
             err.to_string().contains("scope local only allowed for AGENTS.local.db"),
             "Expected scope validation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn add_chunk_with_local_scope_writes_to_local_db() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let local_path = dir.path().join("AGENTS.local.db");
+        write_layer_with_custom_profile(&local_path, 8, OutputNorm::None);
+
+        // Add a chunk with local scope - should succeed
+        let chunk_id = append_chunk(
+            &local_path,
+            "local",
+            None,
+            "note",
+            "test local chunk",
+            1.0,
+            None,
+            &[],
+            &[],
+        )
+        .expect("add chunk with local scope to AGENTS.local.db should succeed");
+
+        assert!(chunk_id > 0, "chunk should have valid ID");
+
+        // Verify the chunk was written to the correct file
+        let file = agentsdb_format::LayerFile::open(&local_path).expect("open local.db");
+        let chunks: Vec<_> = file.chunks().collect::<Result<Vec<_>, _>>().expect("read chunks");
+        assert!(
+            chunks.iter().any(|c| c.content == "test local chunk"),
+            "chunk should exist in AGENTS.local.db"
+        );
+    }
+
+    #[test]
+    fn add_chunk_with_delta_scope_writes_to_delta_db() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let delta_path = dir.path().join("AGENTS.delta.db");
+        write_layer_with_custom_profile(&delta_path, 8, OutputNorm::None);
+
+        // Add a chunk with delta scope - should succeed
+        let chunk_id = append_chunk(
+            &delta_path,
+            "delta",
+            None,
+            "note",
+            "test delta chunk",
+            1.0,
+            None,
+            &[],
+            &[],
+        )
+        .expect("add chunk with delta scope to AGENTS.delta.db should succeed");
+
+        assert!(chunk_id > 0, "chunk should have valid ID");
+
+        // Verify the chunk was written to the correct file
+        let file = agentsdb_format::LayerFile::open(&delta_path).expect("open delta.db");
+        let chunks: Vec<_> = file.chunks().collect::<Result<Vec<_>, _>>().expect("read chunks");
+        assert!(
+            chunks.iter().any(|c| c.content == "test delta chunk"),
+            "chunk should exist in AGENTS.delta.db"
         );
     }
 }

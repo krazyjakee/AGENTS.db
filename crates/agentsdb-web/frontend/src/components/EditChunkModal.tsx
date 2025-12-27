@@ -3,7 +3,6 @@ import type { ChunkFull, AddChunkRequest } from '../types';
 
 interface EditChunkModalProps {
   chunk: ChunkFull | null;
-  selectedLayer: string;
   embeddingDim?: number;
   onSubmit: (data: AddChunkRequest) => Promise<void>;
   onClose: () => void;
@@ -11,7 +10,6 @@ interface EditChunkModalProps {
 
 export function EditChunkModal({
   chunk,
-  selectedLayer,
   embeddingDim = 128,
   onSubmit,
   onClose,
@@ -53,7 +51,6 @@ export function EditChunkModal({
       .filter(Boolean);
 
     const data: AddChunkRequest = {
-      path: selectedLayer,
       scope,
       id: chunk.id,
       kind,

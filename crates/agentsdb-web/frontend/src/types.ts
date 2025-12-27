@@ -84,7 +84,6 @@ export interface PromoteResponse {
 }
 
 export interface AddChunkRequest {
-  path: string;
   scope: string;
   id?: number;
   kind: string;
@@ -97,7 +96,6 @@ export interface AddChunkRequest {
 }
 
 export interface RemoveChunkRequest {
-  path: string;
   scope: string;
   id: number;
 }

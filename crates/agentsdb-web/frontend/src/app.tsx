@@ -157,7 +157,6 @@ export function App() {
       // Use chunk's layer if available (from search results), otherwise use selected layer
       const layerToUse = chunk.layer || selectedLayer;
       await api.removeChunk({
-        path: layerToUse,
         scope: writeScopeForPath(layerToUse),
         id: chunk.id,
       });
@@ -319,7 +318,6 @@ export function App() {
 
         {showAddPanel && (
           <AddChunkPanel
-            selectedLayer={selectedLayer}
             embeddingDim={layerMeta?.embedding_dim}
             onSubmit={handleAddChunk}
             onCancel={() => setShowAddPanel(false)}
@@ -373,7 +371,6 @@ export function App() {
       {editingChunk && (
         <EditChunkModal
           chunk={editingChunk}
-          selectedLayer={selectedLayer}
           embeddingDim={layerMeta?.embedding_dim}
           onSubmit={handleEditSubmit}
           onClose={() => setEditingChunk(null)}
