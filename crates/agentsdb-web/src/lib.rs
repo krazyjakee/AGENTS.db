@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use agentsdb_format::{LayerFile, SourceRef};
+use agentsdb_format::LayerFile;
 use include_dir::{include_dir, Dir};
 
-const TOMBSTONE_KIND: &str = "tombstone";
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 const PROPOSAL_EVENT_KIND: &str = "meta.proposal_event";
 const PROPOSAL_EVENT_LAYER: &str = "AGENTS.delta.db";
@@ -77,7 +76,6 @@ struct LayerCache {
     modified_unix_ms: u64,
     meta: LayerMeta,
     summaries: Vec<ChunkSummary>,
-    removed_ids: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +88,6 @@ struct LayerMeta {
     embedding_backend: Option<String>,
     relationship_count: Option<u64>,
     kinds: BTreeMap<String, u64>,
-    removed_count: u64,
     confidence_min: f32,
     confidence_max: f32,
     confidence_avg: f32,
@@ -104,7 +101,6 @@ struct ChunkSummary {
     confidence: f32,
     created_at_unix_ms: u64,
     source_count: usize,
-    removed: bool,
     content_preview: String,
 }
 
@@ -117,7 +113,6 @@ struct ChunkFull {
     created_at_unix_ms: u64,
     sources: Vec<String>,
     content: String,
-    removed: bool,
 }
 
 fn serve_static_file(path: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
@@ -216,7 +211,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                 .get("limit")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(100);
-            let include_removed = req
+            let _include_removed = req
                 .query
                 .get("include_removed")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -229,7 +224,6 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                 let filtered: Vec<ChunkSummary> = cache
                     .summaries
                     .iter()
-                    .filter(|c| include_removed || !c.removed)
                     .filter(|c| kind_filter.is_empty() || c.kind == kind_filter)
                     .cloned()
                     .collect();
@@ -288,7 +282,7 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             let chunk = {
                 let mut st = state.lock().expect("poisoned mutex");
                 let cache = get_or_build_cache(&mut st, &layer)?;
-                read_chunk_full(&cache.abs_path, &cache.removed_ids, id)?
+                read_chunk_full(&cache.abs_path, id)?
             };
 
             let body = serde_json::to_vec_pretty(&chunk)?;
@@ -328,24 +322,6 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
                     &input.source_chunks,
                 )?;
 
-                // If tombstone_old is true and we're editing an existing chunk (id is provided),
-                // append a tombstone for the old version
-                if input.tombstone_old && input.id.is_some() {
-                    let tombstone_id = input.id.unwrap();
-                    append_chunk(
-                        &abs_path,
-                        &input.scope,
-                        None, // Auto-assign a new ID for the tombstone
-                        TOMBSTONE_KIND,
-                        &format!("Replaced chunk id {}", tombstone_id),
-                        1.0,
-                        None,
-                        &[],
-                        &[tombstone_id],
-                    )
-                    .context("append tombstone for old version")?;
-                }
-
                 st.cache.remove(layer_filename);
                 (assigned, layer_filename.to_string())
             };
@@ -367,38 +343,25 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
         ("POST", "/api/layer/remove") => {
             let input: RemoveInput =
                 serde_json::from_slice(&req.body).context("parse JSON body for remove")?;
-            let layer_filename = match input.scope.as_str() {
-                "local" => "AGENTS.local.db",
-                "delta" => "AGENTS.delta.db",
-                _ => anyhow::bail!("scope must be 'local' or 'delta'"),
-            };
-            {
+            let removed = {
                 let mut st = state.lock().expect("poisoned mutex");
-                let abs_path = resolve_layer_path(&st.root, layer_filename)?;
-                let _ = append_chunk(
-                    &abs_path,
-                    &input.scope,
-                    None,
-                    TOMBSTONE_KIND,
-                    &format!("retract chunk id {}", input.id),
-                    1.0,
-                    None,
-                    &Vec::new(),
-                    &[input.id],
-                )?;
-                st.cache.remove(layer_filename);
-            }
+                let abs_path = resolve_layer_path(&st.root, &input.path)?;
+                let removed = agentsdb_ops::remove_chunk(&abs_path, input.id)
+                    .context("remove chunk")?;
+
+                // Invalidate cache for this layer
+                st.cache.remove(&input.path);
+                removed
+            };
 
             #[derive(Serialize)]
             struct Out {
                 ok: bool,
-                path: String,
-                id: u32,
+                removed: bool,
             }
             let out = Out {
                 ok: true,
-                path: layer_filename.to_string(),
-                id: input.id,
+                removed,
             };
             let body = serde_json::to_vec_pretty(&out)?;
             write_response(stream, 200, "application/json", &body).context("write remove response")
@@ -735,13 +698,11 @@ struct AddInput {
     sources: Vec<String>,
     #[serde(default)]
     source_chunks: Vec<u32>,
-    #[serde(default)]
-    tombstone_old: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct RemoveInput {
-    scope: String, // local|delta
+    path: String,
     id: u32,
 }
 
@@ -987,7 +948,6 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
         LayerFile::open(&abs_path).with_context(|| format!("open {}", abs_path.display()))?;
     let modified_ms = modified_unix_ms(&abs_path)?;
     let mut kinds: BTreeMap<String, u64> = BTreeMap::new();
-    let mut removed_ids: HashSet<u32> = HashSet::new();
     let mut summaries = Vec::with_capacity(file.chunk_count as usize);
 
     let mut conf_min = 1.0f32;
@@ -1005,14 +965,6 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
         conf_n += 1;
 
         let sources = file.sources_for(chunk.rel_start, chunk.rel_count)?;
-        if chunk.kind == TOMBSTONE_KIND {
-            for s in sources.iter() {
-                if let SourceRef::ChunkId(id) = s {
-                    removed_ids.insert(*id);
-                }
-            }
-        }
-
         let source_count = sources.len();
         let content_preview = truncate_preview(chunk.content, 240);
 
@@ -1023,15 +975,8 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
             confidence: chunk.confidence,
             created_at_unix_ms: chunk.created_at_unix_ms,
             source_count,
-            removed: false,
             content_preview,
         });
-    }
-
-    for s in summaries.iter_mut() {
-        if removed_ids.contains(&s.id) {
-            s.removed = true;
-        }
     }
 
     let confidence_avg = if conf_n == 0 {
@@ -1096,7 +1041,6 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
         embedding_backend,
         relationship_count: file.relationship_count,
         kinds,
-        removed_count: removed_ids.len() as u64,
         confidence_min: if conf_n == 0 { 0.0 } else { conf_min },
         confidence_max: if conf_n == 0 { 0.0 } else { conf_max },
         confidence_avg,
@@ -1108,7 +1052,6 @@ fn build_cache(path_label: String, abs_path: PathBuf) -> anyhow::Result<LayerCac
         modified_unix_ms: modified_ms,
         meta,
         summaries,
-        removed_ids,
     })
 }
 
@@ -1124,7 +1067,7 @@ fn truncate_preview(s: &str, max_chars: usize) -> String {
     out
 }
 
-fn read_chunk_full(path: &Path, removed: &HashSet<u32>, id: u32) -> anyhow::Result<ChunkFull> {
+fn read_chunk_full(path: &Path, id: u32) -> anyhow::Result<ChunkFull> {
     let file = LayerFile::open(path).with_context(|| format!("open {}", path.display()))?;
     for chunk in file.chunks() {
         let chunk = chunk?;
@@ -1141,7 +1084,6 @@ fn read_chunk_full(path: &Path, removed: &HashSet<u32>, id: u32) -> anyhow::Resu
             created_at_unix_ms: chunk.created_at_unix_ms,
             sources,
             content: chunk.content.to_string(),
-            removed: removed.contains(&chunk.id),
         });
     }
     anyhow::bail!("chunk id {id} not found");
@@ -1574,9 +1516,6 @@ fn record_proposal(st: &mut ServerState, input: ProposeInput) -> anyhow::Result<
 
     let src_cache =
         get_or_build_cache(st, &from_path).with_context(|| format!("open {from_path}"))?;
-    if src_cache.removed_ids.contains(&input.context_id) {
-        anyhow::bail!("cannot propose removed chunk id {}", input.context_id);
-    }
     let exists = src_cache.summaries.iter().any(|c| c.id == input.context_id);
     if !exists {
         anyhow::bail!("chunk id {} not found in {}", input.context_id, from_path);
@@ -1750,7 +1689,6 @@ fn promote_delta_to_user(
         &user_path.to_string_lossy(),
         ids,
         skip_existing,
-        true, // tombstone_source
     )?;
 
     // Invalidate cache for modified layers
@@ -1784,7 +1722,6 @@ fn promote_layers(
         &to_abs_str,
         ids,
         skip_existing,
-        true, // tombstone_source
     )?;
 
     // Invalidate cache for modified layers
@@ -1890,9 +1827,6 @@ fn promote_delta_to_base_new(
         };
         if c.kind == PROPOSAL_EVENT_KIND {
             anyhow::bail!("cannot promote proposal event chunk id {id} into base");
-        }
-        if c.kind == TOMBSTONE_KIND {
-            anyhow::bail!("cannot promote tombstone chunk id {id} into base");
         }
         if let Some(existing) = by_id.get(id) {
             if chunks_equal(existing, c) {
@@ -2056,120 +1990,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_chunk_from_local_with_local_scope_succeeds() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("AGENTS.local.db");
-        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
-
-        // Add a chunk to remove
-        let chunk_id = append_chunk(&path, "local", None, "note", "test chunk", 1.0, None, &[], &[])
-            .expect("append chunk");
-
-        // Remove the chunk with correct scope
-        let tombstone_id = append_chunk(
-            &path,
-            "local",
-            None,
-            TOMBSTONE_KIND,
-            &format!("retract chunk id {}", chunk_id),
-            1.0,
-            None,
-            &[],
-            &[chunk_id],
-        )
-        .expect("remove should succeed with correct scope");
-
-        assert!(tombstone_id > 0, "tombstone should have valid ID");
-    }
-
-    #[test]
-    fn remove_chunk_from_delta_with_delta_scope_succeeds() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("AGENTS.delta.db");
-        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
-
-        // Add a chunk to remove
-        let chunk_id = append_chunk(&path, "delta", None, "note", "test chunk", 1.0, None, &[], &[])
-            .expect("append chunk");
-
-        // Remove the chunk with correct scope
-        let tombstone_id = append_chunk(
-            &path,
-            "delta",
-            None,
-            TOMBSTONE_KIND,
-            &format!("retract chunk id {}", chunk_id),
-            1.0,
-            None,
-            &[],
-            &[chunk_id],
-        )
-        .expect("remove should succeed with correct scope");
-
-        assert!(tombstone_id > 0, "tombstone should have valid ID");
-    }
-
-    #[test]
-    fn remove_chunk_from_local_with_delta_scope_fails() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("AGENTS.local.db");
-        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
-
-        // Add a chunk
-        let chunk_id = append_chunk(&path, "local", None, "note", "test chunk", 1.0, None, &[], &[])
-            .expect("append chunk");
-
-        // Try to remove with wrong scope (this is the bug we're catching!)
-        let err = append_chunk(
-            &path,
-            "delta", // Wrong scope for AGENTS.local.db
-            None,
-            TOMBSTONE_KIND,
-            &format!("retract chunk id {}", chunk_id),
-            1.0,
-            None,
-            &[],
-            &[chunk_id],
-        )
-        .expect_err("remove should fail with wrong scope");
-
-        assert!(
-            err.to_string().contains("scope delta only allowed for AGENTS.delta.db"),
-            "Expected scope validation error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn remove_chunk_from_delta_with_local_scope_fails() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("AGENTS.delta.db");
-        write_layer_with_custom_profile(&path, 8, OutputNorm::None);
-
-        // Add a chunk
-        let chunk_id = append_chunk(&path, "delta", None, "note", "test chunk", 1.0, None, &[], &[])
-            .expect("append chunk");
-
-        // Try to remove with wrong scope
-        let err = append_chunk(
-            &path,
-            "local", // Wrong scope for AGENTS.delta.db
-            None,
-            TOMBSTONE_KIND,
-            &format!("retract chunk id {}", chunk_id),
-            1.0,
-            None,
-            &[],
-            &[chunk_id],
-        )
-        .expect_err("remove should fail with wrong scope");
-
-        assert!(
-            err.to_string().contains("scope local only allowed for AGENTS.local.db"),
-            "Expected scope validation error, got: {err}"
-        );
-    }
-
-    #[test]
     fn add_chunk_with_local_scope_writes_to_local_db() {
         let dir = tempfile::tempdir().expect("tempdir");
         let local_path = dir.path().join("AGENTS.local.db");
@@ -2230,4 +2050,5 @@ mod tests {
             "chunk should exist in AGENTS.delta.db"
         );
     }
+
 }

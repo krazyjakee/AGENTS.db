@@ -19,7 +19,6 @@ export function EditChunkModal({
   const [content, setContent] = useState('');
   const [confidence, setConfidence] = useState(0.8);
   const [sources, setSources] = useState('');
-  const [tombstoneOld, setTombstoneOld] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -58,7 +57,6 @@ export function EditChunkModal({
       confidence,
       dim: embeddingDim,
       sources: sourcesArray.length > 0 ? sourcesArray : undefined,
-      tombstone_old: tombstoneOld,
     };
 
     try {
@@ -109,26 +107,6 @@ export function EditChunkModal({
         )}
 
         <form onSubmit={handleSubmit}>
-          <div class="alert alert-info mb-4">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              class="stroke-current shrink-0 w-6 h-6"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <span>
-              Editing creates a new chunk with the same ID. Enable "Tombstone old" to mark the
-              original as removed.
-            </span>
-          </div>
-
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div class="form-control">
               <label class="label">
@@ -202,19 +180,6 @@ export function EditChunkModal({
               placeholder="file.rs:42, doc.md:10 (comma-separated)"
               disabled={submitting}
             />
-          </div>
-
-          <div class="form-control mt-4">
-            <label class="cursor-pointer label justify-start gap-2">
-              <input
-                type="checkbox"
-                class="checkbox"
-                checked={tombstoneOld}
-                onChange={(e) => setTombstoneOld((e.target as HTMLInputElement).checked)}
-                disabled={submitting}
-              />
-              <span class="label-text">Tombstone old chunk (mark original as removed)</span>
-            </label>
           </div>
 
           <div class="modal-action">

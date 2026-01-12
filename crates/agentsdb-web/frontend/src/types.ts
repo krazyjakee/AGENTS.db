@@ -92,12 +92,6 @@ export interface AddChunkRequest {
   dim?: number;
   sources?: string[];
   source_chunks?: number[];
-  tombstone_old?: boolean;
-}
-
-export interface RemoveChunkRequest {
-  scope: string;
-  id: number;
 }
 
 export interface ProposeRequest {

@@ -167,14 +167,12 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             to_path,
             ids,
             skip_existing,
-            tombstone_source,
             yes,
         } => crate::commands::promote::cmd_promote(
             &from_path,
             &to_path,
             &ids,
             skip_existing,
-            tombstone_source,
             yes,
             json,
         ),
@@ -182,13 +180,11 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             base,
             user,
             out,
-            remove_tombstones,
             remove_proposals,
         } => crate::commands::compact::cmd_compact(
             base.as_deref(),
             user.as_deref(),
             out.as_deref(),
-            remove_tombstones,
             remove_proposals,
             json,
         ),
@@ -197,6 +193,12 @@ pub(crate) fn run(cli: Cli) -> anyhow::Result<()> {
             layers,
             allow_base,
         } => crate::commands::reembed::cmd_reembed(&dir, &layers, allow_base, json),
+        Command::Smash {
+            dir,
+            layers,
+            limit,
+            allow_base,
+        } => crate::commands::smash::cmd_smash(&dir, &layers, limit, allow_base, json),
         Command::Destroy { root, dry_run } => crate::commands::destroy::cmd_destroy(&root, dry_run, json),
         Command::Web { root, bind } => {
             if json {

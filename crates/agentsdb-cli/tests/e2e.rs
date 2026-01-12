@@ -839,8 +839,8 @@ fn proposals_accept_appends_decision_record() {
         dir.path(),
         &["--json", "inspect", "--layer", "AGENTS.delta.db"],
     );
-    // 4 chunks: original 2 + decision record + tombstone for promoted chunk
-    assert_eq!(after["chunk_count"].as_u64(), Some(4));
+    // 3 chunks: original 2 + decision record
+    assert_eq!(after["chunk_count"].as_u64(), Some(3));
 }
 
 #[test]

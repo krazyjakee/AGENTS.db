@@ -7,10 +7,11 @@ interface ChunkViewerProps {
   onClose: () => void;
   onPropose?: (chunk: ChunkFull) => void;
   onPromote?: (chunk: ChunkFull) => void;
+  onRemove?: (chunk: ChunkFull) => void;
   onEdit?: (chunk: ChunkFull) => void;
 }
 
-export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: ChunkViewerProps) {
+export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote, onRemove }: ChunkViewerProps) {
   const [showRaw, setShowRaw] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
@@ -152,46 +153,65 @@ export function ChunkViewer({ chunk, onClose, onPropose, onEdit, onPromote }: Ch
         </div>
 
         <div class="modal-action mt-4">
-          <div class="flex gap-2 flex-wrap w-full justify-end">
-            {onEdit && !chunk.removed && (
-              <button class="btn btn-sm btn-primary gap-1" onClick={() => onEdit(chunk)}>
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                </svg>
-                Edit
+          <div class="flex gap-2 flex-wrap w-full justify-between">
+            <div class="flex gap-2">
+              {onRemove && !chunk.removed && (
+                <button
+                  class="btn btn-sm btn-error gap-1"
+                  onClick={() => onRemove(chunk)}
+                  title="Remove this chunk permanently"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                  Remove
+                </button>
+              )}
+            </div>
+            <div class="flex gap-2">
+              {onEdit && !chunk.removed && (
+                <button class="btn btn-sm btn-primary gap-1" onClick={() => onEdit(chunk)}>
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                  Edit
+                </button>
+              )}
+              {onPropose && !chunk.removed && (
+                <button
+                  class="btn btn-sm btn-secondary gap-1"
+                  onClick={() => onPropose(chunk)}
+                  title="Propose this chunk for promotion"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z" />
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+                    <path d="M2 2l7.586 7.586" />
+                    <circle cx="11" cy="11" r="2" />
+                  </svg>
+                  Propose
+                </button>
+              )}
+              {onPromote && !chunk.removed && (
+                <button
+                  class="btn btn-sm btn-accent gap-1"
+                  onClick={() => onPromote(chunk)}
+                  title="Promote this chunk directly"
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="18 15 12 9 6 15" />
+                  </svg>
+                  Promote
+                </button>
+              )}
+              <button class="btn btn-sm btn-ghost" onClick={onClose}>
+                Close
               </button>
-            )}
-            {onPropose && !chunk.removed && (
-              <button
-                class="btn btn-sm btn-secondary gap-1"
-                onClick={() => onPropose(chunk)}
-                title="Propose this chunk for promotion"
-              >
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 19l7-7 3 3-7 7-3-3z" />
-                  <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-                  <path d="M2 2l7.586 7.586" />
-                  <circle cx="11" cy="11" r="2" />
-                </svg>
-                Propose
-              </button>
-            )}
-            {onPromote && !chunk.removed && (
-              <button
-                class="btn btn-sm btn-accent gap-1"
-                onClick={() => onPromote(chunk)}
-                title="Promote this chunk directly"
-              >
-                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="18 15 12 9 6 15" />
-                </svg>
-                Promote
-              </button>
-            )}
-            <button class="btn btn-sm btn-ghost" onClick={onClose}>
-              Close
-            </button>
+            </div>
           </div>
         </div>
       </div>

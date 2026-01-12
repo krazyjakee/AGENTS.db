@@ -21,7 +21,6 @@ import type {
   ProposeRequest,
 } from './types';
 import { api } from './api';
-import { writeScopeForPath } from './utils/helpers';
 
 // Custom hook for error handling in async operations
 function useErrorHandler(setError: (error: string | null) => void) {
@@ -147,23 +146,6 @@ export function App() {
     });
   };
 
-  const handleRemoveChunk = async (chunk: ChunkSummary) => {
-    const confirmed = confirm(
-      `Remove chunk ${chunk.id}? This will create a tombstone (soft delete).`
-    );
-    if (!confirmed) return;
-
-    await withErrorHandling(async () => {
-      // Use chunk's layer if available (from search results), otherwise use selected layer
-      const layerToUse = chunk.layer || selectedLayer;
-      await api.removeChunk({
-        scope: writeScopeForPath(layerToUse),
-        id: chunk.id,
-      });
-      await loadChunks();
-    });
-  };
-
   const handleAddChunk = async (data: AddChunkRequest) => {
     try {
       await api.addChunk(data);
@@ -219,6 +201,30 @@ export function App() {
       await refreshLayers();
       setPromotingChunk(null);
       setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const handleRemoveChunk = async (chunk: ChunkFull | ChunkSummary) => {
+    // Use chunk's layer if available (from search results), otherwise use selected layer
+    const layerToUse = 'layer' in chunk && chunk.layer ? chunk.layer : selectedLayer;
+
+    if (!confirm(`Are you sure you want to remove chunk ${chunk.id}? This will rewrite the layer file and cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const result = await api.removeChunk(layerToUse, chunk.id);
+      if (result.removed) {
+        await loadChunks();
+        await refreshLayers();
+        setViewingChunk(null);
+        setError(null);
+      } else {
+        setError(`Chunk ${chunk.id} not found`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       throw err;
@@ -361,6 +367,7 @@ export function App() {
           onClose={() => setViewingChunk(null)}
           onPropose={handlePropose}
           onPromote={handlePromote}
+          onRemove={handleRemoveChunk}
           onEdit={(chunk) => {
             setViewingChunk(null);
             setEditingChunk(chunk);

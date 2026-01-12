@@ -14,7 +14,7 @@ interface ChunkListProps {
   layerMeta?: LayerMeta | null;
   onViewChunk: (chunk: ChunkSummary) => void;
   onEditChunk: (chunk: ChunkSummary) => void;
-  onRemoveChunk: (chunk: ChunkSummary) => void;
+  onRemoveChunk?: (chunk: ChunkSummary) => void;
   onPageChange: (newOffset: number) => void;
   onKindFilterChange?: (kind: string) => void;
   onIncludeRemovedChange?: (include: boolean) => void;
@@ -393,13 +393,15 @@ export function ChunkList({
                                 >
                                   Edit
                                 </button>
-                                <button
-                                  class="btn btn-ghost btn-xs text-error"
-                                  onClick={() => onRemoveChunk(chunk)}
-                                  title="Remove chunk (tombstone)"
-                                >
-                                  Remove
-                                </button>
+                                {onRemoveChunk && (
+                                  <button
+                                    class="btn btn-ghost btn-xs text-error"
+                                    onClick={() => onRemoveChunk(chunk)}
+                                    title="Remove chunk permanently"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
                               </>
                             )}
                           </div>

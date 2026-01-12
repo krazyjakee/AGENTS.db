@@ -7,14 +7,13 @@ pub(crate) fn cmd_compact(
     base: Option<&str>,
     user: Option<&str>,
     out: Option<&str>,
-    remove_tombstones: bool,
     remove_proposals: bool,
     json: bool,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("resolve current directory")?;
 
     if base.is_none() && user.is_none() && out.is_none() {
-        let compacted = compact_all_in_dir(&cwd, remove_tombstones, remove_proposals)
+        let compacted = compact_all_in_dir(&cwd, remove_proposals)
             .context("compact all")?;
         if json {
             #[derive(Serialize)]
@@ -58,7 +57,7 @@ pub(crate) fn cmd_compact(
         .context("refuse to write compacted output to a non-writable layer path")?;
 
     let (schema, mut chunks) =
-        compact_layers(base.as_deref(), user.as_deref(), remove_tombstones, remove_proposals)
+        compact_layers(base.as_deref(), user.as_deref(), remove_proposals)
             .context("compact")?;
     agentsdb_format::write_layer_atomic(&out, &schema, &mut chunks, None)
         .context("write compacted layer")?;
@@ -91,7 +90,6 @@ pub(crate) fn cmd_compact(
 
 fn compact_all_in_dir(
     dir: &Path,
-    remove_tombstones: bool,
     remove_proposals: bool,
 ) -> anyhow::Result<Vec<PathBuf>> {
     let mut compacted = Vec::new();
@@ -140,11 +138,6 @@ fn compact_all_in_dir(
         let mut chunks = Vec::new();
 
         for c in all_chunks {
-            // Filter tombstones if requested
-            if remove_tombstones && c.kind == agentsdb_embeddings::config::KIND_TOMBSTONE {
-                continue;
-            }
-
             // Filter proposal events if requested
             if remove_proposals && c.kind == "meta.proposal_event" {
                 continue;
@@ -194,7 +187,6 @@ fn default_out_path(base: Option<&str>, user: Option<&str>) -> Option<String> {
 fn compact_layers(
     base: Option<&str>,
     user: Option<&str>,
-    remove_tombstones: bool,
     remove_proposals: bool,
 ) -> anyhow::Result<(
     agentsdb_format::LayerSchema,
@@ -233,11 +225,6 @@ fn compact_layers(
             // Skip options chunks from non-base layers.
             // Only AGENTS.db (base layer) should contain options documents.
             if layer_name != "base" && c.kind == agentsdb_embeddings::config::KIND_OPTIONS {
-                continue;
-            }
-
-            // Filter tombstones if requested
-            if remove_tombstones && c.kind == agentsdb_embeddings::config::KIND_TOMBSTONE {
                 continue;
             }
 
@@ -367,7 +354,7 @@ mod tests {
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
-        cmd_compact(Some(&base_s), Some(&user_s), None, false, false, true).unwrap();
+        cmd_compact(Some(&base_s), Some(&user_s), None, false, true).unwrap();
 
         let out_file = agentsdb_format::LayerFile::open(&out_path).unwrap();
         let chunks = agentsdb_format::read_all_chunks(&out_file).unwrap();
@@ -406,7 +393,7 @@ mod tests {
 
         let base_s = base_path.to_string_lossy().into_owned();
         let user_s = user_path.to_string_lossy().into_owned();
-        let (_, chunks) = compact_layers(Some(&base_s), Some(&user_s), false, false).unwrap();
+        let (_, chunks) = compact_layers(Some(&base_s), Some(&user_s), false).unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].id, 1);
@@ -435,7 +422,7 @@ mod tests {
         std::fs::write(&junk_path, b"not an agentsdb layer").unwrap();
         std::fs::write(&other_path, b"ignore").unwrap();
 
-        let compacted = compact_all_in_dir(&dir, false, false).unwrap();
+        let compacted = compact_all_in_dir(&dir, false).unwrap();
         let rendered: HashSet<String> = compacted
             .into_iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

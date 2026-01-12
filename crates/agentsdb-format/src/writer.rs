@@ -91,7 +91,9 @@ pub fn append_layer_atomic(
     layer_metadata_json: Option<&[u8]>,
 ) -> Result<Vec<u32>, Error> {
     let path = path.as_ref();
-    let file = LayerFile::open(path)?;
+    // Use lenient opening to allow appending to files with duplicate IDs from previous edits.
+    // This is similar to the fix for the compact command.
+    let file = LayerFile::open_lenient(path)?;
     let schema = schema_of(&file);
     let mut all_chunks = decode_all_chunks(&file)?;
     let existing_metadata = file.layer_metadata_bytes().map(|b| b.to_vec());

@@ -15,6 +15,7 @@ pub(crate) mod promote;
 pub(crate) mod proposals;
 pub(crate) mod reembed;
 pub(crate) mod search;
+pub(crate) mod smash;
 pub(crate) mod validate;
 pub(crate) mod web;
 pub(crate) mod write;
