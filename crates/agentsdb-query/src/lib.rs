@@ -2,7 +2,7 @@ use agentsdb_core::error::{Error, FormatError, SchemaError};
 use agentsdb_core::types::{
     Author, Chunk, ChunkId, LayerId, ProvenanceRef, SearchFilters, SearchResult,
 };
-use agentsdb_embeddings::config::{KIND_OPTIONS, KIND_TOMBSTONE};
+use agentsdb_embeddings::config::KIND_OPTIONS;
 use agentsdb_format::{LayerFile, SourceRef};
 use std::collections::{HashMap, HashSet};
 
@@ -104,7 +104,7 @@ pub fn search_layers_with_options(
     }
 
     // Precompute which chunk IDs are selected (local > user > delta > base), accounting for
-    // append-only updates within a layer and tombstone retractions.
+    // append-only updates within a layer.
     // In hybrid mode with query_text, lexical tier comparison allows better matches from
     // lower-precedence layers to surface.
     let selection = compute_selection(layers, query.query_text.as_deref())?;
@@ -142,7 +142,7 @@ pub fn search_layers_with_options(
             if !kinds.contains(chunk.kind) {
                 continue;
             }
-        } else if chunk.kind == KIND_TOMBSTONE || chunk.kind == KIND_OPTIONS || chunk.kind.starts_with("meta.") {
+        } else if chunk.kind == KIND_OPTIONS || chunk.kind.starts_with("meta.") {
             continue;
         }
 
@@ -286,31 +286,13 @@ fn compute_selection<'a>(
 ) -> Result<Selection<'a>, Error> {
     let mut selected: HashMap<ChunkId, SelectedChunk<'_>> = HashMap::new();
     let mut hidden_by: HashMap<ChunkId, Vec<LayerId>> = HashMap::new();
-    let mut retracted_in_higher: HashSet<ChunkId> = HashSet::new();
 
     for (layer_id, layer) in layers {
         let mut last_by_id: HashMap<ChunkId, agentsdb_format::ChunkView<'_>> = HashMap::new();
-        let mut retracted_in_layer: HashSet<ChunkId> = HashSet::new();
 
         for chunk_res in layer.chunks() {
             let chunk = chunk_res?;
             last_by_id.insert(ChunkId(chunk.id), chunk);
-        }
-
-        for chunk in last_by_id.values() {
-            if chunk.kind != KIND_TOMBSTONE {
-                continue;
-            }
-            let sources = layer.sources_for(chunk.rel_start, chunk.rel_count)?;
-            for s in sources {
-                if let SourceRef::ChunkId(id) = s {
-                    retracted_in_layer.insert(ChunkId(id));
-                }
-            }
-        }
-
-        for id in retracted_in_layer {
-            retracted_in_higher.insert(id);
         }
 
         for (id, chunk) in last_by_id {
@@ -320,12 +302,7 @@ fn compute_selection<'a>(
 
             if let Some(existing) = selected.get(&id) {
                 // Chunk ID already exists in higher-priority layer
-                // Compare lexical tiers (only if not retracted)
-                if retracted_in_higher.contains(&id) && chunk.kind != KIND_TOMBSTONE {
-                    hidden_by.entry(id).or_default().push(*layer_id);
-                    continue;
-                }
-
+                // Compare lexical tiers
                 let existing_tier = existing.lexical_tier;
 
                 if new_tier < existing_tier {
@@ -344,11 +321,6 @@ fn compute_selection<'a>(
                     // Keep existing version (better tier or same tier with higher layer precedence)
                     hidden_by.entry(id).or_default().push(*layer_id);
                 }
-                continue;
-            }
-
-            if retracted_in_higher.contains(&id) && chunk.kind != KIND_TOMBSTONE {
-                hidden_by.entry(id).or_default().push(*layer_id);
                 continue;
             }
 

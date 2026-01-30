@@ -7,15 +7,13 @@ use agentsdb_format::{ChunkInput, ChunkSource, LayerFile};
 
 use crate::util::now_unix_ms;
 
-const TOMBSTONE_KIND: &str = "tombstone";
-
 /// Append a chunk to a layer file (local or delta)
 ///
 /// # Arguments
 /// * `path` - Path to the layer file
 /// * `scope` - Either "local" or "delta"
 /// * `id` - Optional chunk ID (None = auto-assign)
-/// * `kind` - Chunk kind (e.g., "note", "invariant", "tombstone")
+/// * `kind` - Chunk kind (e.g., "note", "invariant")
 /// * `content` - Chunk content
 /// * `confidence` - Confidence score (0.0-1.0)
 /// * `dim` - Embedding dimension (required only if creating a new layer)
@@ -174,28 +172,4 @@ pub fn append_chunk(
             .context("create layer")?;
         Ok(assigned)
     }
-}
-
-/// Append a tombstone chunk to mark another chunk as retracted
-pub fn append_tombstone(
-    path: &Path,
-    scope: &str,
-    retracted_id: u32,
-    dim: Option<u32>,
-    tool_name: &str,
-    tool_version: &str,
-) -> anyhow::Result<u32> {
-    append_chunk(
-        path,
-        scope,
-        None, // Auto-assign ID
-        TOMBSTONE_KIND,
-        &format!("retract chunk id {}", retracted_id),
-        1.0,
-        dim,
-        &[],
-        &[retracted_id],
-        tool_name,
-        tool_version,
-    )
 }

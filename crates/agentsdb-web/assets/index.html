@@ -254,25 +254,15 @@
           <label>Content</label>
           <textarea id="editContent" rows="8" class="mono"></textarea>
           <div class="row" style="margin-top:10px">
-            <button id="editSubmit" class="icon" title="Append updated chunk and tombstone the old version (Ctrl/⌘ + Enter)" aria-label="Save edit">
+            <button id="editSubmit" class="icon" title="Append updated chunk (Ctrl/⌘ + Enter)" aria-label="Save edit">
               <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M20 6L9 17l-5-5"/>
               </svg>
               Save (append)
             </button>
-            <button id="editTombstone" class="icon secondary" title="Manually tombstone without editing (use if you already saved)" aria-label="Tombstone previous">
-              <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 6h18"/>
-                <path d="M8 6V4h8v2"/>
-                <path d="M19 6l-1 14H6L5 6"/>
-                <path d="M10 11v6"/>
-                <path d="M14 11v6"/>
-              </svg>
-              Tombstone old
-            </button>
           </div>
           <div class="muted" style="margin-top:6px">
-            Edits are append-only: saving creates a new record with the same id. You can optionally tombstone the previous record.
+            Edits are append-only: saving creates a new record with the same id.
           </div>
         </div>
       </section>

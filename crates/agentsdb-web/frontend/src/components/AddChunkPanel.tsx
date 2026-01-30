@@ -2,14 +2,12 @@ import { useState } from 'preact/hooks';
 import type { AddChunkRequest } from '../types';
 
 interface AddChunkPanelProps {
-  selectedLayer: string;
   embeddingDim?: number;
   onSubmit: (data: AddChunkRequest) => Promise<void>;
   onCancel: () => void;
 }
 
 export function AddChunkPanel({
-  selectedLayer,
   embeddingDim = 128,
   onSubmit,
   onCancel,
@@ -38,7 +36,6 @@ export function AddChunkPanel({
       .filter(Boolean);
 
     const data: AddChunkRequest = {
-      path: selectedLayer,
       scope,
       kind,
       content: content.trim(),

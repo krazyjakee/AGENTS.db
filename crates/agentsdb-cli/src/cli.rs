@@ -277,9 +277,6 @@ pub(crate) enum Command {
         /// Skip ids already present in the destination layer instead of erroring.
         #[arg(long)]
         skip_existing: bool,
-        /// Tombstone promoted chunks in the source layer after promotion (default: true).
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        tombstone_source: bool,
         /// Assume \"yes\" for interactive confirmation prompts.
         #[arg(long)]
         yes: bool,
@@ -295,9 +292,6 @@ pub(crate) enum Command {
         /// Output path for the compacted layer.
         #[arg(long)]
         out: Option<String>,
-        /// Remove tombstone chunks during compaction.
-        #[arg(long)]
-        remove_tombstones: bool,
         /// Remove proposal event chunks during compaction.
         #[arg(long)]
         remove_proposals: bool,
@@ -311,6 +305,22 @@ pub(crate) enum Command {
         #[arg(long, default_value = "user,delta,local")]
         layers: String,
         /// Allow re-embedding the base layer (AGENTS.db). Required to include `base` in --layers.
+        #[arg(long)]
+        allow_base: bool,
+    },
+    /// Break down large files into smaller chunks and re-compile them into a layer.
+    /// This command is ALWAYS destructive and replaces the entire layer.
+    Smash {
+        /// Directory containing `AGENTS*.db` standard layer files.
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Comma-separated logical layers to smash: `base,user,delta,local`.
+        #[arg(long, default_value = "user,delta,local")]
+        layers: String,
+        /// Maximum character limit per chunk.
+        #[arg(long, default_value_t = 4000)]
+        limit: usize,
+        /// Allow writing to `AGENTS.db` (dangerous; bypasses immutability).
         #[arg(long)]
         allow_base: bool,
     },

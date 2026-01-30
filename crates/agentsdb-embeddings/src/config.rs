@@ -7,7 +7,6 @@ use crate::embedder::Embedder;
 use crate::hash::HashEmbedder;
 
 pub const KIND_OPTIONS: &str = "options";
-pub const KIND_TOMBSTONE: &str = "tombstone";
 
 pub const DEFAULT_LOCAL_MODEL: &str = "all-minilm-l6-v2";
 pub const DEFAULT_LOCAL_REVISION: &str = "main";

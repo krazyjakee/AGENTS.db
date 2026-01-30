@@ -204,22 +204,20 @@ agentsdb options allowlist add --scope local --model all-minilm-l6-v2 --revision
 
 **Offline backends**: You don't *need* a model to embed documents in agentsdb. In this case, use the `hash` backend and set your `dim` to 128.
 
-## Editing and tombstones
+## Editing
 
-Layers are append-only, but records are still “editable”:
+Layers are append-only, but records are still "editable":
 
 - **Edit**: append a new chunk with the **same id**; the newest chunk with that id in the layer is the effective version.
-- **Remove**: append a tombstone chunk (`kind=tombstone`) that references the removed chunk id via `--source-chunk ID`.
 
-Tombstones and options records are excluded from search results by default (unless filtered by `--kind tombstone` / `--kind options`).
+Options records are excluded from search results by default (unless filtered by `--kind options`).
 
 ## Web UI
 
-`agentsdb web` launches a local Web UI for browsing layers under a root directory and appending/removing/editing chunks in writable layers (`AGENTS.local.db` / `AGENTS.delta.db`).
+`agentsdb web` launches a local Web UI for browsing layers under a root directory and appending/editing chunks in writable layers (`AGENTS.local.db` / `AGENTS.delta.db`).
 
-- “Edit” appends a new version with the same id (and can optionally tombstone the old record).
-- “Remove” is a soft-delete (tombstone append).
-- “Export” downloads the selected layer as JSON/NDJSON; “Import” appends from an export file (append-only).
+- "Edit" appends a new version with the same id.
+- "Export" downloads the selected layer as JSON/NDJSON; "Import" appends from an export file (append-only).
 
 ```sh
 agentsdb web --root . --bind 127.0.0.1:3030

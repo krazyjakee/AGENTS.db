@@ -84,7 +84,6 @@ export interface PromoteResponse {
 }
 
 export interface AddChunkRequest {
-  path: string;
   scope: string;
   id?: number;
   kind: string;
@@ -93,13 +92,6 @@ export interface AddChunkRequest {
   dim?: number;
   sources?: string[];
   source_chunks?: number[];
-  tombstone_old?: boolean;
-}
-
-export interface RemoveChunkRequest {
-  path: string;
-  scope: string;
-  id: number;
 }
 
 export interface ProposeRequest {

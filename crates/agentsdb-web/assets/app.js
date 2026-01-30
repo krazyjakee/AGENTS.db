@@ -276,15 +276,6 @@ async function loadChunks() {
             <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
           </svg>
         </button>
-        <button data-act="remove" data-id="${c.id}" class="iconOnly secondary" title="Remove (soft delete)" aria-label="Remove" ${scope ? "" : "disabled"}>
-          <svg class="iconSvg" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 6h18"/>
-            <path d="M8 6V4h8v2"/>
-            <path d="M19 6l-1 14H6L5 6"/>
-            <path d="M10 11v6"/>
-            <path d="M14 11v6"/>
-          </svg>
-        </button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -414,15 +405,6 @@ async function rejectProposalIds(ids) {
   }
 }
 
-async function removeChunk(id) {
-  const path = $("layer").value;
-  const scope = writeScopeForPath(path);
-  if (!scope) { alert("Remove is only supported for AGENTS.local.db / AGENTS.delta.db"); return; }
-  if (!confirm("Remove is a soft-delete (tombstone append). Continue?")) return;
-  await api("/api/layer/remove", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id: Number(id) }) });
-  await refreshMeta();
-  await loadChunks();
-}
 
 async function addChunk() {
   const path = $("layer").value;
@@ -587,7 +569,6 @@ $("table").onclick = async (e) => {
   const act = btn.getAttribute("data-act");
   const id = btn.getAttribute("data-id");
   if (act === "view") await viewChunk(id);
-  if (act === "remove") await removeChunk(id);
   if (act === "edit") await openEditor(id);
 };
 
@@ -639,25 +620,13 @@ async function editChunkSubmit() {
   const kind = $("editKind").value.trim();
   const confidence = Number($("editConfidence").value);
   const content = $("editContent").value;
-  await api("/api/layer/add", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id, kind, confidence, content, tombstone_old: true }) });
-  $("editor").style.display = "none";
-  await refreshMeta();
-  await loadChunks();
-}
-
-async function editChunkTombstone() {
-  const path = $("layer").value;
-  const scope = $("editScope").value;
-  const id = Number($("editor").dataset.id || "0");
-  if (!confirm("Append tombstone for the old record id?")) return;
-  await api("/api/layer/remove", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id }) });
+  await api("/api/layer/add", { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify({ path, scope, id, kind, confidence, content }) });
   $("editor").style.display = "none";
   await refreshMeta();
   await loadChunks();
 }
 
 $("editSubmit").onclick = editChunkSubmit;
-$("editTombstone").onclick = editChunkTombstone;
 
 $("proposeBtn").onclick = () => { $("proposePanel").style.display = "block"; };
 $("proposeCancel").onclick = () => { $("proposePanel").style.display = "none"; };

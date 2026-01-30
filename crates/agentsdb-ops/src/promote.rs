@@ -3,8 +3,6 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::util::now_unix_ms;
-
 #[derive(Debug, Default, Serialize)]
 pub struct PromoteOutcome {
     pub promoted: Vec<u32>,
@@ -18,7 +16,6 @@ pub struct PromoteOutcome {
 /// * `to_path` - Destination layer path
 /// * `ids` - Chunk IDs to promote
 /// * `_skip_existing` - (Deprecated) No longer used; promoted chunks always receive new auto-assigned IDs
-/// * `tombstone_source` - If true, add tombstone markers in source layer after promotion
 ///
 /// # Returns
 /// A PromoteOutcome containing lists of promoted and skipped IDs
@@ -27,7 +24,6 @@ pub fn promote_chunks(
     to_path: &str,
     ids: &[u32],
     _skip_existing: bool,
-    tombstone_source: bool,
 ) -> anyhow::Result<PromoteOutcome> {
     if ids.is_empty() {
         anyhow::bail!("ids must be non-empty");
@@ -93,33 +89,6 @@ pub fn promote_chunks(
         )
         .context("write")?
     };
-
-    // Tombstone promoted chunks in source layer if requested
-    if tombstone_source && !filtered.is_empty() {
-        let now_ms = now_unix_ms();
-
-        let mut tombstones = Vec::new();
-        for id in &filtered {
-            let chunk = by_id
-                .get(id)
-                .ok_or_else(|| anyhow::anyhow!("chunk id {id} not found in {from_path}"))?;
-
-            let tombstone = agentsdb_format::ChunkInput {
-                id: 0, // Will be auto-assigned
-                kind: "tombstone".to_string(),
-                content: format!("Promoted chunk {} to {}", id, to_path),
-                author: "human".to_string(),
-                confidence: 1.0,
-                created_at_unix_ms: now_ms,
-                embedding: chunk.embedding.clone(),
-                sources: vec![agentsdb_format::ChunkSource::ChunkId(*id)],
-            };
-            tombstones.push(tombstone);
-        }
-
-        agentsdb_format::append_layer_atomic(from_path, &mut tombstones, None)
-            .context("append tombstones to source layer")?;
-    }
 
     Ok(PromoteOutcome {
         promoted: assigned_ids,

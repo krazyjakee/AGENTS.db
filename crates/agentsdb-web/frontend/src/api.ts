@@ -7,7 +7,6 @@ import type {
   ProposalRow,
   PromoteResponse,
   AddChunkRequest,
-  RemoveChunkRequest,
   ProposeRequest,
   ImportRequest,
   ImportResponse,
@@ -80,11 +79,11 @@ export const api = {
     });
   },
 
-  async removeChunk(data: RemoveChunkRequest): Promise<{ ok: boolean; path: string; id: number }> {
+  async removeChunk(path: string, id: number): Promise<{ ok: boolean; removed: boolean }> {
     return request('/api/layer/remove', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ path, id }),
     });
   },
 

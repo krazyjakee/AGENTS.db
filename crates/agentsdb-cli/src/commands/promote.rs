@@ -8,7 +8,6 @@ pub(crate) fn cmd_promote(
     to_path: &str,
     ids: &str,
     skip_existing: bool,
-    tombstone_source: bool,
     yes: bool,
     json: bool,
 ) -> anyhow::Result<()> {
@@ -46,7 +45,6 @@ pub(crate) fn cmd_promote(
         to_path,
         &wanted,
         skip_existing,
-        tombstone_source,
     )?;
 
     if json {
