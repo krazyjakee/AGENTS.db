@@ -124,10 +124,11 @@ export function renderMarkdown(md: string): string {
       const section = r === 0 ? 'thead' : (r === 1 ? 'tbody' : '');
       if (section) html += `<${section}>`;
       html += '<tr>';
-      for (let c = 0; c < tableRows[r].length; c++) {
+      const row = tableRows[r]!;
+      for (let c = 0; c < row.length; c++) {
         const align = tableAligns[c] || '';
         const style = align ? ` style="text-align:${escapeAttr(align)}"` : '';
-        html += `<${tag}${style}>${renderInline((tableRows[r][c] ?? '').trim())}</${tag}>`;
+        html += `<${tag}${style}>${renderInline((row[c] ?? '').trim())}</${tag}>`;
       }
       html += '</tr>';
       if (r === 0) html += '</thead>';
