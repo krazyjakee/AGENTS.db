@@ -2,8 +2,24 @@ use crate::{EmbeddingElementType, LayerFile};
 use agentsdb_core::error::{Error, FormatError, PermissionError};
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
+use std::hash::{BuildHasher, Hasher, RandomState};
 use std::io::Write;
 use std::path::Path;
+
+/// Generate a random non-zero u32 using std's RandomState (no external crate needed).
+fn random_chunk_id(used: &HashSet<u32>) -> u32 {
+    let state = RandomState::new();
+    loop {
+        let mut h = state.build_hasher();
+        // Hash the current set length + a fresh RandomState seed to get entropy each call.
+        h.write_usize(used.len());
+        h.write_u64(RandomState::new().build_hasher().finish());
+        let candidate = (h.finish() as u32) | 1; // ensure non-zero
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+    }
+}
 
 const MAGIC_AGDB: u32 = 0x4244_4741; // 'A' 'G' 'D' 'B'
 
@@ -57,25 +73,14 @@ pub fn write_layer_atomic(
     chunks: &mut [ChunkInput],
     layer_metadata_json: Option<&[u8]>,
 ) -> Result<Vec<u32>, Error> {
-    // Auto-assign IDs for chunks with id=0
+    // Auto-assign randomized IDs for chunks with id=0
     let mut used_ids: HashSet<u32> = chunks.iter().filter(|c| c.id != 0).map(|c| c.id).collect();
-    let mut next_id = used_ids
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
-        .max(1);
 
     let mut assigned = Vec::with_capacity(chunks.len());
     for c in chunks.iter_mut() {
         if c.id == 0 {
-            while used_ids.contains(&next_id) {
-                next_id = next_id.saturating_add(1);
-            }
-            c.id = next_id;
+            c.id = random_chunk_id(&used_ids);
             used_ids.insert(c.id);
-            next_id = next_id.saturating_add(1);
         }
         assigned.push(c.id);
     }
@@ -102,23 +107,12 @@ pub fn append_layer_atomic(
         .or(existing_metadata);
 
     let mut used_ids: HashSet<u32> = all_chunks.iter().map(|c| c.id).collect();
-    let mut next_id = used_ids
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
-        .max(1);
 
     let mut assigned = Vec::with_capacity(new_chunks.len());
     for c in new_chunks.iter_mut() {
         if c.id == 0 {
-            while used_ids.contains(&next_id) {
-                next_id = next_id.saturating_add(1);
-            }
-            c.id = next_id;
+            c.id = random_chunk_id(&used_ids);
             used_ids.insert(c.id);
-            next_id = next_id.saturating_add(1);
         } else {
             used_ids.insert(c.id);
         }

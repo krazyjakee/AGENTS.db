@@ -90,6 +90,11 @@ pub fn promote_chunks(
         .context("write")?
     };
 
+    // Remove promoted chunks from the source layer so promotion is a move, not a copy.
+    for id in ids {
+        let _ = crate::remove::remove_chunk(std::path::Path::new(from_path), *id);
+    }
+
     Ok(PromoteOutcome {
         promoted: assigned_ids,
         skipped,

@@ -91,6 +91,9 @@ export function renderMarkdown(md: string): string {
   let code: string[] = [];
   let inQuote = false;
   let quote: string[] = [];
+  let inTable = false;
+  let tableRows: string[][] = [];
+  let tableAligns: string[] = [];
 
   function flushParagraph() {
     if (!paragraph.length) return;
@@ -113,10 +116,34 @@ export function renderMarkdown(md: string): string {
     quote = [];
   }
 
+  function flushTable() {
+    if (!inTable) return;
+    let html = '<table>';
+    for (let r = 0; r < tableRows.length; r++) {
+      const tag = r === 0 ? 'th' : 'td';
+      const section = r === 0 ? 'thead' : (r === 1 ? 'tbody' : '');
+      if (section) html += `<${section}>`;
+      html += '<tr>';
+      for (let c = 0; c < tableRows[r].length; c++) {
+        const align = tableAligns[c] || '';
+        const style = align ? ` style="text-align:${escapeAttr(align)}"` : '';
+        html += `<${tag}${style}>${renderInline((tableRows[r][c] ?? '').trim())}</${tag}>`;
+      }
+      html += '</tr>';
+      if (r === 0) html += '</thead>';
+    }
+    html += '</tbody></table>';
+    out.push(html);
+    inTable = false;
+    tableRows = [];
+    tableAligns = [];
+  }
+
   function closeBlocks() {
     flushParagraph();
     flushList();
     flushQuote();
+    flushTable();
   }
 
   for (const line of lines) {
@@ -145,6 +172,7 @@ export function renderMarkdown(md: string): string {
       flushParagraph();
       flushList();
       flushQuote();
+      flushTable();
       continue;
     }
 
@@ -198,6 +226,34 @@ export function renderMarkdown(md: string): string {
       continue;
     }
 
+    // Table row detection: lines containing pipes
+    if (line.includes('|')) {
+      const cells = line.replace(/^\|/, '').replace(/\|$/, '').split('|');
+      // Check if this is a separator row (e.g. |---|---|)
+      const isSeparator = cells.every(c => /^\s*:?-+:?\s*$/.test(c));
+      if (isSeparator && tableRows.length === 1) {
+        // This is the alignment row after the header
+        tableAligns = cells.map(c => {
+          const t = c.trim();
+          if (t.startsWith(':') && t.endsWith(':')) return 'center';
+          if (t.endsWith(':')) return 'right';
+          return 'left';
+        });
+        continue;
+      }
+      if (!inTable) {
+        flushParagraph();
+        flushList();
+        flushQuote();
+        inTable = true;
+        tableRows = [];
+        tableAligns = [];
+      }
+      tableRows.push(cells);
+      continue;
+    }
+
+    flushTable();
     paragraph.push(line);
   }
 

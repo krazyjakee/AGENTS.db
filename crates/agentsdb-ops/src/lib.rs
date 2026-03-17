@@ -1,3 +1,4 @@
+pub mod decay;
 pub mod export;
 pub mod import;
 pub mod promote;
@@ -7,6 +8,7 @@ pub mod util;
 pub mod write;
 
 // Re-export commonly used types for convenience
+pub use decay::DecayState;
 pub use export::export_layer;
 pub use import::import_into_layer;
 pub use promote::promote_chunks;

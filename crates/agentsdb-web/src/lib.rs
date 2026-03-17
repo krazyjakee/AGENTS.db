@@ -58,13 +58,16 @@ pub fn serve(root: &str, bind: &str) -> anyhow::Result<()> {
 struct ServerState {
     root: PathBuf,
     cache: HashMap<String, LayerCache>,
+    decay: agentsdb_ops::DecayState,
 }
 
 impl ServerState {
     fn new(root: PathBuf) -> Self {
+        let decay = agentsdb_ops::DecayState::load(&root);
         Self {
             root,
             cache: HashMap::new(),
+            decay,
         }
     }
 }
@@ -282,7 +285,11 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             let chunk = {
                 let mut st = state.lock().expect("poisoned mutex");
                 let cache = get_or_build_cache(&mut st, &layer)?;
-                read_chunk_full(&cache.abs_path, id)?
+                let c = read_chunk_full(&cache.abs_path, id)?;
+                // Touch the chunk to refresh its decay timer
+                st.decay.touch(&layer, id);
+                let _ = st.decay.save(&st.root);
+                c
             };
 
             let body = serde_json::to_vec_pretty(&chunk)?;
@@ -292,8 +299,8 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             let input: SearchInput =
                 serde_json::from_slice(&req.body).context("parse JSON body for search")?;
             let results = {
-                let st = state.lock().expect("poisoned mutex");
-                perform_search(&st, input)?
+                let mut st = state.lock().expect("poisoned mutex");
+                perform_search(&mut st, input)?
             };
             let body = serde_json::to_vec_pretty(&results)?;
             write_response(stream, 200, "application/json", &body).context("write /api/search")
@@ -495,6 +502,42 @@ fn handle_conn(stream: &mut TcpStream, state: &Arc<Mutex<ServerState>>) -> anyho
             let body = serde_json::to_vec_pretty(&out)?;
             write_response(stream, 200, "application/json", &body)
                 .context("write /api/promote/batch")
+        }
+        ("GET", "/api/decay") => {
+            let st = state.lock().expect("poisoned mutex");
+            let body = serde_json::to_vec_pretty(&st.decay)?;
+            write_response(stream, 200, "application/json", &body).context("write /api/decay")
+        }
+        ("POST", "/api/decay") => {
+            #[derive(Deserialize)]
+            struct DecayInput {
+                ttl_ms: Option<u64>,
+            }
+            let input: DecayInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for decay")?;
+            let mut st = state.lock().expect("poisoned mutex");
+            if let Some(ttl) = input.ttl_ms {
+                st.decay.set_ttl_ms(ttl);
+            }
+            let _ = st.decay.save(&st.root);
+            let body = serde_json::to_vec_pretty(&st.decay)?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write POST /api/decay")
+        }
+        ("POST", "/api/decay/touch") => {
+            #[derive(Deserialize)]
+            struct TouchInput {
+                layer: String,
+                id: u32,
+            }
+            let input: TouchInput =
+                serde_json::from_slice(&req.body).context("parse JSON body for decay touch")?;
+            let mut st = state.lock().expect("poisoned mutex");
+            st.decay.touch(&input.layer, input.id);
+            let _ = st.decay.save(&st.root);
+            let body = serde_json::to_vec_pretty(&serde_json::json!({ "ok": true }))?;
+            write_response(stream, 200, "application/json", &body)
+                .context("write /api/decay/touch")
         }
         _ => write_response(stream, 404, "text/plain; charset=utf-8", b"not found\n")
             .context("write 404"),
@@ -746,7 +789,7 @@ fn list_layers(root: &Path) -> anyhow::Result<Vec<ListedLayer>> {
     Ok(out)
 }
 
-fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<SearchOutput> {
+fn perform_search(state: &mut ServerState, input: SearchInput) -> anyhow::Result<SearchOutput> {
     use agentsdb_ops::{search_layers, SearchConfig};
     use agentsdb_query::LayerSet;
 
@@ -806,10 +849,18 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
         0
     };
 
-    // Convert results to JSON format
-    let json_results = results
+    // Filter out decayed chunks and touch accessed ones
+    let mut touched: Vec<(String, u32)> = Vec::new();
+    let json_results: Vec<SearchResultJson> = results
         .into_iter()
+        .filter(|r| {
+            let layer_name = layer_id_to_filename(r.layer);
+            !state.decay.is_decayed(layer_name, r.chunk.id.get(), r.chunk.created_at_unix_ms)
+        })
         .map(|r| {
+            let layer_name = layer_id_to_filename(r.layer).to_string();
+            touched.push((layer_name.clone(), r.chunk.id.get()));
+
             let content_preview = if r.chunk.content.len() > 200 {
                 format!("{}...", &r.chunk.content[..200])
             } else {
@@ -817,7 +868,7 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
             };
 
             SearchResultJson {
-                layer: layer_id_to_filename(r.layer).to_string(),
+                layer: layer_name,
                 id: r.chunk.id.get(),
                 kind: r.chunk.kind,
                 score: r.score,
@@ -830,6 +881,12 @@ fn perform_search(state: &ServerState, input: SearchInput) -> anyhow::Result<Sea
             }
         })
         .collect();
+
+    // Touch accessed chunks to refresh their decay timers
+    if !touched.is_empty() {
+        state.decay.touch_many(&touched);
+        let _ = state.decay.save(&state.root);
+    }
 
     Ok(SearchOutput {
         results: json_results,
